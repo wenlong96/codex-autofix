@@ -240,11 +240,11 @@ def get_team(team_id: str):
             "SELECT * FROM products WHERE id = ?", (team["product_id"],)
         ).fetchone()
 
-        member_count = len(members)
-        complete = member_count >= 2
+        complete = len(members) >= 2
 
         # BUG #1: total_savings uses hardcoded 2 instead of len(members)
-        total_savings = product["price"] * TEAM_DISCOUNT * member_count
+        expected_member_count = 2
+        total_savings = product["price"] * TEAM_DISCOUNT * expected_member_count
 
         return {
             "team": dict(team),
@@ -253,7 +253,7 @@ def get_team(team_id: str):
             "complete": complete,
             "discount_pct": TEAM_DISCOUNT * 100,
             "total_savings": round(total_savings, 2),
-            "member_count": member_count,
+            "member_count": len(members),
         }
 
 
