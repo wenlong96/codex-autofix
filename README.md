@@ -7,8 +7,6 @@ hallucinations and duplicates, and Codex diagnoses, patches, and tests the
 verified bugs without a human in the loop. A persona then re-runs against the
 patched site to confirm the fix held.
 
-Built for the Sea x OpenAI Regional Codex Hackathon, Singapore.
-
 ---
 
 ## Table of contents
@@ -37,10 +35,9 @@ their own. This project closes the loop between the two.
 
 The system runs against a deliberately buggy e-commerce prototype (a
 Shopee-style "team up with a friend for a group discount" site). It is built so
-the whole cycle, from discovery to a promoted fix, runs in roughly four minutes
-with no human intervention.
+the whole cycle, from discovery to a promoted fix, and runs with no human intervention.
 
-The current build ships three personas as a proof of concept. The architecture
+The current build ships three personas. The architecture
 is designed to scale to as many user archetypes as a real product needs.
 
 ---
@@ -159,8 +156,6 @@ Every teammate needs the following installed before starting:
 
 - Python 3.10 or newer (the build was developed on 3.13). Check with
   `python --version`.
-- Node.js (only needed if you want to use the Codex CLI; not required to run
-  the project itself).
 - Git.
 - An OpenAI API key with access to the Codex and GPT-4o-mini models. This is
   required. Get one at https://platform.openai.com/api-keys.
@@ -184,7 +179,7 @@ cd <repo-name>
 ```
 
 You must be added as a collaborator first, because the repository is private.
-Ask the team lead for an invite if you cannot see it.
+Ask for an invite if you cannot see it.
 
 ### 2. Create and activate a virtual environment
 
@@ -240,7 +235,7 @@ Then open `.env` and fill in at least your OpenAI key:
 
 ```
 LLM_PROVIDER=gemini
-GEMINI_API_KEY=your-gemini-key-or-leave-blank
+GEMINI_API_KEY=your-gemini-key (or leave blank, the 3 persona uses openai by default, but additional others will default to gemini for cheap calls)
 GEMINI_MODEL=gemini-2.5-flash-lite
 OPENAI_API_KEY=sk-your-real-openai-key
 OPENAI_MODEL=gpt-4o-mini
@@ -342,7 +337,7 @@ clean re-validation, and writes a transcript to `personas/reports/`.
 
 ---
 
-## The dashboard
+## The dashboard (fancy visuals)
 
 The dashboard replays a saved run as an animated, stage-by-stage visualization.
 It is replay-first by design, so the live demo is never at the mercy of a rate
@@ -363,9 +358,9 @@ Adjust playback speed with the 1x, 2x, 4x, 8x controls. Default is 2x.
 
 ---
 
-## Configuration and flags
+## Configuration and flags (optional)
 
-The full loop accepts several flags. Pass them through the batch files too, for
+The full loop accepts several OPTIONAL flags. Pass them through the batch files too, for
 example `run_loop.bat --sequential`.
 
 - `--spotlight <persona>`   Which persona runs in the visible browser. Default
