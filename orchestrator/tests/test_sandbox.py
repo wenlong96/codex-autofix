@@ -31,7 +31,7 @@ def test_sandbox_copies_project_files():
     with Sandbox.create(source_root=PROJECT_ROOT) as sb:
         assert (sb.path / "prototype" / "main.py").exists()
         assert (sb.path / "prototype" / "static" / "index.html").exists()
-        assert (sb.path / "prototype" / "tests" / "test_planted_bugs.py").exists()
+        assert (sb.path / "prototype" / "tests" / "test_regressions.py").exists()
 
 
 def test_sandbox_ignores_venv_and_caches():
@@ -57,20 +57,22 @@ def test_sandbox_modifications_do_not_leak():
 
 
 def test_run_tests_in_sandbox_failing_bugs():
-    """Running tests on the un-patched prototype should show bug failures."""
+    """Running tests on the un-patched prototype should show real test failures."""
     with Sandbox.create(source_root=PROJECT_ROOT) as sb:
         result = sb.run_tests("tests/")
         # With bugs present, tests fail
         assert result.passed is False
-        # ...but specifically the bug tests, not crash/import errors
-        combined = result.stdout + result.stderr
-        assert "test_bug" in combined.lower()
+        # ...but specifically a regression test, not crash/import errors
+        combined = (result.stdout + result.stderr).lower()
+        assert "failed" in combined
+        assert "test_" in combined
 
 
-def test_run_tests_in_sandbox_with_patched_bug1():
+def test_run_tests_in_sandbox_with_patched_savings():
     """
-    Apply a known correct fix for bug #1 in the sandbox, then verify bug1
-    test now passes. (Other bug tests should still fail — we only fixed #1.)
+    Apply a known correct fix for the team-savings calculation in the sandbox,
+    then verify that test now passes. (Other failing tests should still fail —
+    we only fixed one.)
     """
     with Sandbox.create(source_root=PROJECT_ROOT) as sb:
         main_py = sb.read_file("prototype/main.py")
@@ -84,9 +86,9 @@ def test_run_tests_in_sandbox_with_patched_bug1():
         assert patched != main_py, "Patch did not apply — string not found"
         sb.write_file("prototype/main.py", patched)
 
-        result = sb.run_tests("tests/test_planted_bugs.py::test_bug1_team_total_savings_should_reflect_actual_member_count")
+        result = sb.run_tests("tests/test_regressions.py::test_team_savings_reflects_actual_member_count")
         assert result.passed is True, (
-            f"Expected bug1 test to pass after fix.\n"
+            f"Expected the team-savings test to pass after fix.\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 

@@ -1,9 +1,47 @@
-.venv/
+# ---- Secrets (NEVER commit) ----
 .env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.key
+*.pem
+secrets.json
+
+# ---- Python ----
+.venv/
+venv/
+env/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Databases & runtime artifacts ----
+*.db
+*.sqlite
+*.sqlite3
 prototype/prototype.db
+
+# ---- Generated transcripts & reports ----
 personas/reports/
-.DS_Store
+**/reports/*.json
+
+# ---- Node (if any tooling creeps in) ----
 node_modules/
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# ---- Keep these explicitly (override broad rules above) ----
+# main.py.buggy is the demo reset baseline — it MUST be tracked.
+!prototype/main.py.buggy

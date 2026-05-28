@@ -94,13 +94,50 @@ if req.user_id == team["creator_id"]:
 
 ---
 
-## Why these three?
+## Bug #4 — Promo code accepted but not applied in `POST /api/checkout`
 
-| Bug | Category | Codex skill demonstrated |
-|---|---|---|
-| #1 | State / business logic | Reading, understanding, refactoring existing logic |
-| #2 | Input validation | Defensive programming, edge case handling |
-| #3 | Authorization | Cross-table reasoning, state-aware checks |
+**Category:** UI/UX trust (display lies about state)
+**Location:** `main.py`, `checkout()` function
+**Severity:** High — user-visible misrepresentation, financial impact
+
+### What happens
+The checkout endpoint accepts a `promo_code`. When the code is `SAVE10`, it
+sets `promo_applied = True` in the response and echoes the code, BUT the
+total is never actually reduced. Users see "Promo SAVE10 applied!" on the
+confirmation page yet pay full price.
+
+### How a persona finds it
+Deal-hunter persona enters `SAVE10` at checkout, sees the success banner,
+then checks: did the total actually drop? It didn't. The persona flags
+the mismatch between the "applied" message and the unchanged amount.
+
+### Expected fix
+```python
+# Inside the SAVE10 branch, also reduce the total
+if req.promo_code and req.promo_code.strip().upper() == "SAVE10":
+    promo_applied = True
+    total = total * 0.90  # actually apply the 10% discount
+```
+
+### Regression tests
+- `tests/test_planted_bugs.py::test_bug4_promo_save10_actually_reduces_total`
+- `tests/test_planted_bugs.py::test_bug4_unknown_promo_does_not_flag_applied`
+
+---
+
+## Why these four?
+
+| Bug | Category | Codex skill demonstrated | Persona target |
+|---|---|---|---|
+| #1 | State / business logic | Reading, understanding, refactoring existing logic | Maria (price-sensitive) |
+| #2 | Input validation | Defensive programming, edge case handling | (API-only — surfaced via logs/audit) |
+| #3 | Authorization | Cross-table reasoning, state-aware checks | (API-only — latent vulnerability) |
+| #4 | UI/UX trust | Connecting backend state to user-visible claims | Priya (deal-hunter) |
+
+Bugs #1 and #4 are **UI-discoverable** by personas during normal exploration.
+Bugs #2 and #3 are API-layer issues that the UI design (correctly) hides —
+they remain in the codebase as latent vulnerabilities the system would flag
+through other means (security audit, log analysis).
 
 Each can be:
 - **Found** by a persona behaving normally or adversarially (not contrived)

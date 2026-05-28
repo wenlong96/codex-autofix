@@ -163,28 +163,55 @@ class OpenAIClient(LLMClient):
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
 
-        resp = self.client.chat.completions.create(**kwargs)
-        return LLMResponse(text=resp.choices[0].message.content or "", raw=resp)
+        # Retry on 429 rate-limit. The OpenAI SDK exposes a RateLimitError
+        # but we use a duck-typed check on the string so we don't have to
+        # import yet another symbol.
+        import time as _time
+        delays = [1.5, 3.5, 7.0]  # ~12s total max; 3 retries before failing
+        for attempt, delay in enumerate([0.0] + delays):
+            if delay > 0:
+                _time.sleep(delay)
+            try:
+                resp = self.client.chat.completions.create(**kwargs)
+                return LLMResponse(
+                    text=resp.choices[0].message.content or "", raw=resp
+                )
+            except Exception as e:
+                msg = str(e).lower()
+                is_rate_limit = (
+                    "rate_limit" in msg or "rate limit" in msg or "429" in msg
+                )
+                if is_rate_limit and attempt < len(delays):
+                    continue
+                raise
+
+        # Unreachable, but keep mypy/static-analysers happy.
+        raise RuntimeError("OpenAI complete: exhausted retries unexpectedly")
 
 
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
-def get_llm_client() -> LLMClient:
+def get_llm_client(
+    provider: str | None = None,
+    model: str | None = None,
+) -> LLMClient:
     """
-    Return the configured client based on env vars.
+    Return the configured client.
 
-    Required env:
+    If `provider` / `model` are passed, they override env vars. This allows
+    per-persona overrides (e.g. routing a vision-heavy persona to a stronger
+    model while keeping others on a cheap default).
+
+    Env defaults:
         LLM_PROVIDER         "gemini" (default) or "openai"
         GEMINI_API_KEY       if provider == gemini
         OPENAI_API_KEY       if provider == openai
-
-    Optional env:
         GEMINI_MODEL         default: gemini-2.5-flash-lite
         OPENAI_MODEL         default: gpt-4o-mini
     """
-    provider = os.environ.get("LLM_PROVIDER", "gemini").lower()
+    provider = (provider or os.environ.get("LLM_PROVIDER", "gemini")).lower()
 
     if provider == "gemini":
         key = os.environ.get("GEMINI_API_KEY")
@@ -192,7 +219,7 @@ def get_llm_client() -> LLMClient:
             raise RuntimeError(
                 "GEMINI_API_KEY not set. Add it to your .env file."
             )
-        model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+        model = model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
         return GeminiClient(api_key=key, model=model)
 
     if provider == "openai":
@@ -201,7 +228,7 @@ def get_llm_client() -> LLMClient:
             raise RuntimeError(
                 "OPENAI_API_KEY not set. Add it to your .env file."
             )
-        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        model = model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
         return OpenAIClient(api_key=key, model=model)
 
     raise ValueError(

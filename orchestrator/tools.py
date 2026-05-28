@@ -42,7 +42,7 @@ TOOL_SCHEMAS: list[dict] = [
                     "description": (
                         "Path relative to the project root, e.g. "
                         "'prototype/main.py' or "
-                        "'prototype/tests/test_planted_bugs.py'."
+                        "'prototype/tests/test_regressions.py'."
                     ),
                 }
             },
@@ -116,7 +116,7 @@ TOOL_SCHEMAS: list[dict] = [
                     "type": "string",
                     "description": (
                         "Test path (e.g. "
-                        "'tests/test_planted_bugs.py::test_bug1_xxx'). "
+                        "'tests/test_regressions.py::test_bug1_xxx'). "
                         "Use 'tests/' to run all tests."
                     ),
                 }

@@ -1,9 +1,8 @@
 """
-Tests that demonstrate the planted bugs.
+Regression tests for the team-purchase service.
 
-Each test pair: one shows the buggy behaviour (CURRENTLY PASSES because the
-bug exists), one shows the desired behaviour (CURRENTLY FAILS — these are
-what Codex will need to make pass after patching).
+Each test asserts a piece of correct behaviour. Tests that currently fail
+describe behaviour the service does not yet satisfy.
 
 Run with:
     cd prototype && python -m pytest tests/ -v
@@ -29,14 +28,11 @@ def client():
 
 
 # ---------------------------------------------------------------------------
-# BUG #1 — Stale total in GET /api/teams/{team_id}
+# Team savings
 # ---------------------------------------------------------------------------
 
-def test_bug1_team_total_savings_should_reflect_actual_member_count(client):
-    """
-    Currently FAILS: total_savings is hardcoded as if 2 members joined.
-    After fix: total_savings should reflect actual member count.
-    """
+def test_team_savings_reflects_actual_member_count(client):
+    """Displayed savings should match the number of members who have joined."""
     # Creator starts a team (1 member only)
     r = client.post("/api/teams", json={"product_id": 1, "user_id": "alice"})
     team_id = r.json()["team_id"]
@@ -49,19 +45,16 @@ def test_bug1_team_total_savings_should_reflect_actual_member_count(client):
     expected = round(product_price * 0.15 * 1, 2)
     assert data["total_savings"] == expected, (
         f"Expected savings for 1 member ({expected}) but got "
-        f"{data['total_savings']} — bug #1"
+        f"{data['total_savings']}"
     )
 
 
 # ---------------------------------------------------------------------------
-# BUG #2 — Negative quantity accepted in /api/teams/{team_id}/join
+# Join validation
 # ---------------------------------------------------------------------------
 
-def test_bug2_join_team_should_reject_negative_quantity(client):
-    """
-    Currently FAILS: API accepts quantity = -1.
-    After fix: should return 400.
-    """
+def test_join_team_rejects_negative_quantity(client):
+    """A negative quantity should be rejected with a 400."""
     r = client.post("/api/teams", json={"product_id": 1, "user_id": "alice"})
     team_id = r.json()["team_id"]
 
@@ -70,12 +63,12 @@ def test_bug2_join_team_should_reject_negative_quantity(client):
         json={"user_id": "bob", "quantity": -1},
     )
     assert r.status_code == 400, (
-        f"Expected 400 for negative quantity, got {r.status_code} — bug #2"
+        f"Expected 400 for negative quantity, got {r.status_code}"
     )
 
 
-def test_bug2_join_team_should_reject_zero_quantity(client):
-    """Zero quantity is also nonsensical."""
+def test_join_team_rejects_zero_quantity(client):
+    """A zero quantity should be rejected with a 400."""
     r = client.post("/api/teams", json={"product_id": 1, "user_id": "alice"})
     team_id = r.json()["team_id"]
 
@@ -87,14 +80,11 @@ def test_bug2_join_team_should_reject_zero_quantity(client):
 
 
 # ---------------------------------------------------------------------------
-# BUG #3 — Creator can self-join their own team
+# Self-join
 # ---------------------------------------------------------------------------
 
-def test_bug3_creator_cannot_join_own_team(client):
-    """
-    Currently FAILS: creator can join their own team and trigger "complete".
-    After fix: should return 400 or similar.
-    """
+def test_creator_cannot_join_own_team(client):
+    """A team's creator should not be able to join their own team."""
     r = client.post("/api/teams", json={"product_id": 1, "user_id": "alice"})
     team_id = r.json()["team_id"]
 
@@ -104,7 +94,75 @@ def test_bug3_creator_cannot_join_own_team(client):
         json={"user_id": "alice", "quantity": 1},
     )
     assert r.status_code == 400, (
-        f"Expected 400 for self-join, got {r.status_code} — bug #3"
+        f"Expected 400 for self-join, got {r.status_code}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Promo codes
+# ---------------------------------------------------------------------------
+
+def test_promo_save10_reduces_total(client):
+    """SAVE10 should reduce the order total by 10%, not just be acknowledged."""
+    # Reference total without promo
+    r = client.post(
+        "/api/checkout",
+        json={"user_id": "alice", "product_id": 1, "quantity": 1},
+    )
+    full_total = r.json()["total"]
+
+    # Same checkout with SAVE10
+    r = client.post(
+        "/api/checkout",
+        json={
+            "user_id": "alice",
+            "product_id": 1,
+            "quantity": 1,
+            "promo_code": "SAVE10",
+        },
+    )
+    data = r.json()
+
+    expected = round(full_total * 0.90, 2)
+    assert data["promo_applied"] is True
+    assert data["total"] == pytest.approx(expected, abs=0.02), (
+        f"Expected SAVE10 to reduce total to {expected}, got {data['total']}"
+    )
+
+
+def test_unknown_promo_not_marked_applied(client):
+    """An unknown promo code should not be reported as applied."""
+    r = client.post(
+        "/api/checkout",
+        json={
+            "user_id": "alice",
+            "product_id": 1,
+            "quantity": 1,
+            "promo_code": "BOGUSCODE",
+        },
+    )
+    assert r.json()["promo_applied"] is False
+
+
+# ---------------------------------------------------------------------------
+# Price consistency
+# ---------------------------------------------------------------------------
+
+def test_list_price_matches_checkout_price(client):
+    """The price shown in the product list should match what checkout charges."""
+    r = client.get("/api/products")
+    products = r.json()
+    p = next(x for x in products if x["id"] == 1)
+    list_displayed = p.get("display_price", p["price"])
+
+    r = client.post(
+        "/api/checkout",
+        json={"user_id": "alice", "product_id": 1, "quantity": 1},
+    )
+    paid = r.json()["total"]
+
+    assert list_displayed == pytest.approx(paid, abs=0.02), (
+        f"List shows {list_displayed} but checkout charges {paid}"
     )
 
 

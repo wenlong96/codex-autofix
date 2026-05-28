@@ -1,0 +1,1390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Adaptive Self-Healing Engineer — Mission Control</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* =========================================================================
+       Design tokens
+       ========================================================================= */
+    :root {
+      --bg-0:        #0a0a0c;
+      --bg-1:        #111114;
+      --bg-2:        #15161b;
+      --bg-3:        #1d1f26;
+      --border:      #26272f;
+      --border-soft: #1a1b22;
+      --text-0:      #e8e8ec;
+      --text-1:      #b8b9c2;
+      --text-2:      #6c6d78;
+      --text-3:      #43454d;
+      --accent:      #f5a623;     /* amber */
+      --accent-dim:  #8a5a13;
+      --accent-glow: rgba(245, 166, 35, 0.18);
+      --good:        #4ade80;
+      --bad:         #f87171;
+      --info:        #60a5fa;
+      --persona-1:   #f5a623;     /* priya */
+      --persona-2:   #60a5fa;     /* kelvin */
+      --persona-3:   #c084fc;     /* hassan */
+      --mono:        'IBM Plex Mono', ui-monospace, monospace;
+      --sans:        'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      background: var(--bg-0);
+      color: var(--text-0);
+      font-family: var(--sans);
+      font-weight: 400;
+      letter-spacing: 0.01em;
+      min-height: 100vh;
+    }
+
+    /* Subtle grain for atmosphere */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 100;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' /%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.045 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' /%3E%3C/svg%3E");
+      opacity: 0.6;
+    }
+
+    /* =========================================================================
+       Layout
+       ========================================================================= */
+    .shell {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 24px 32px 48px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 0 20px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 24px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-mark {
+      width: 32px; height: 32px;
+      background: var(--accent);
+      position: relative;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--mono);
+      font-weight: 600;
+      color: var(--bg-0);
+      font-size: 14px;
+    }
+    .brand-mark::before {
+      content: '';
+      position: absolute;
+      inset: -2px;
+      border: 1px solid var(--accent-dim);
+      pointer-events: none;
+    }
+    .brand-text { line-height: 1.2; }
+    .brand-title {
+      font-family: var(--mono);
+      font-weight: 500;
+      font-size: 14px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .brand-subtitle {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-2);
+      letter-spacing: 0.05em;
+    }
+
+    .topbar-meta {
+      display: flex;
+      align-items: center;
+      gap: 32px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-2);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .topbar-meta .key { color: var(--text-3); margin-right: 4px; }
+    .topbar-meta .val { color: var(--text-1); }
+    .clock-dot {
+      display: inline-block;
+      width: 6px; height: 6px;
+      background: var(--good);
+      border-radius: 50%;
+      margin-right: 6px;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    /* =========================================================================
+       Controls
+       ========================================================================= */
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      margin-bottom: 24px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .controls label { color: var(--text-2); }
+    .controls input[type="file"] {
+      display: none;
+    }
+    .btn {
+      background: transparent;
+      color: var(--text-1);
+      border: 1px solid var(--border);
+      padding: 7px 14px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.12s ease;
+    }
+    .btn:hover {
+      color: var(--bg-0);
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .btn:disabled:hover {
+      color: var(--text-1);
+      background: transparent;
+      border-color: var(--border);
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: var(--bg-0);
+      border-color: var(--accent);
+    }
+    .btn-primary:hover {
+      background: #ffba43;
+      border-color: #ffba43;
+    }
+    .speed-group {
+      display: inline-flex;
+      border: 1px solid var(--border);
+    }
+    .speed-group .btn { border: none; border-right: 1px solid var(--border); }
+    .speed-group .btn:last-child { border-right: none; }
+    .speed-group .btn.active {
+      background: var(--accent);
+      color: var(--bg-0);
+    }
+    .controls .spacer { flex: 1; }
+    .controls .stage-pill {
+      padding: 4px 10px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      color: var(--accent);
+    }
+
+    /* =========================================================================
+       Panels
+       ========================================================================= */
+    .panel {
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      margin-bottom: 24px;
+      position: relative;
+    }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .panel-title {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-1);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .panel-title::before {
+      content: '';
+      width: 2px; height: 12px;
+      background: var(--accent);
+      display: inline-block;
+    }
+    .panel-title.dim::before { background: var(--text-3); }
+    .panel-meta {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-2);
+      letter-spacing: 0.04em;
+    }
+    .panel-body { padding: 20px; }
+
+    /* Active panel glow */
+    .panel.active {
+      border-color: var(--accent-dim);
+      box-shadow: 0 0 0 1px var(--accent-dim), 0 0 40px -10px var(--accent-glow);
+    }
+    .panel.active .panel-title { color: var(--accent); }
+    .panel.complete .panel-title::before { background: var(--good); }
+
+    /* =========================================================================
+       Persona tiles
+       ========================================================================= */
+    .persona-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    .persona-tile {
+      background: var(--bg-2);
+      border: 1px solid var(--border-soft);
+      padding: 16px;
+      position: relative;
+      transition: all 0.3s ease;
+      opacity: 0.35;
+      min-height: 180px;
+      display: flex;
+      flex-direction: column;
+    }
+    .persona-tile.active {
+      opacity: 1;
+      border-color: var(--persona-color, var(--accent));
+      box-shadow: 0 0 0 1px var(--persona-color, var(--accent)), 0 8px 24px -12px var(--persona-color, var(--accent));
+    }
+    .persona-tile.done {
+      opacity: 1;
+    }
+    .persona-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .persona-avatar {
+      width: 36px; height: 36px;
+      background: var(--persona-color, var(--accent));
+      color: var(--bg-0);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--mono);
+      font-weight: 600;
+      font-size: 13px;
+      letter-spacing: 0.02em;
+      flex-shrink: 0;
+    }
+    .persona-identity { line-height: 1.3; flex: 1; min-width: 0; }
+    .persona-name {
+      font-weight: 500;
+      font-size: 14px;
+      color: var(--text-0);
+    }
+    .persona-archetype {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text-2);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .persona-status {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border: 1px solid var(--border);
+      color: var(--text-2);
+      flex-shrink: 0;
+    }
+    .persona-status.thinking { color: var(--persona-color); border-color: var(--persona-color); }
+    .persona-status.flagged  { color: var(--bad); border-color: var(--bad); }
+    .persona-status.clean    { color: var(--good); border-color: var(--good); }
+
+    .persona-thought {
+      font-size: 12px;
+      color: var(--text-1);
+      line-height: 1.5;
+      flex: 1;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+    }
+    .persona-thought.empty {
+      color: var(--text-3);
+      font-style: italic;
+    }
+
+    .persona-footer {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border-soft);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text-2);
+      letter-spacing: 0.04em;
+    }
+    .persona-action {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text-1);
+    }
+    .persona-step {
+      color: var(--text-3);
+      flex-shrink: 0;
+    }
+
+    /* Bug-found pulse */
+    @keyframes bugPulse {
+      0%   { box-shadow: 0 0 0 1px var(--bad), 0 0 0 0 rgba(248, 113, 113, 0); }
+      50%  { box-shadow: 0 0 0 1px var(--bad), 0 0 24px 8px rgba(248, 113, 113, 0.35); }
+      100% { box-shadow: 0 0 0 1px var(--bad), 0 0 0 0 rgba(248, 113, 113, 0); }
+    }
+    .persona-tile.bug-found {
+      animation: bugPulse 1.6s ease-out;
+      border-color: var(--bad);
+    }
+
+    /* =========================================================================
+       Triage panel
+       ========================================================================= */
+    .triage-list { display: flex; flex-direction: column; gap: 8px; }
+    .triage-row {
+      display: grid;
+      grid-template-columns: 24px 80px 1fr auto;
+      gap: 16px;
+      align-items: start;
+      padding: 12px 14px;
+      background: var(--bg-2);
+      border-left: 2px solid var(--text-3);
+      font-size: 13px;
+      line-height: 1.5;
+      opacity: 0;
+      transform: translateX(-8px);
+      transition: opacity 0.4s ease, transform 0.4s ease;
+    }
+    .triage-row.shown { opacity: 1; transform: translateX(0); }
+    .triage-row.real { border-left-color: var(--good); }
+    .triage-row.bad  { border-left-color: var(--text-3); opacity: 0.6; }
+    .triage-icon {
+      font-family: var(--mono);
+      font-size: 14px;
+      color: var(--good);
+    }
+    .triage-row.bad .triage-icon { color: var(--text-3); }
+    .triage-source {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text-2);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding-top: 2px;
+    }
+    .triage-content { min-width: 0; }
+    .triage-bug {
+      color: var(--text-0);
+      font-weight: 400;
+      margin-bottom: 4px;
+    }
+    .triage-row.bad .triage-bug { color: var(--text-2); text-decoration: line-through; text-decoration-color: var(--text-3); }
+    .triage-reason {
+      font-size: 12px;
+      color: var(--text-2);
+      font-style: italic;
+    }
+    .triage-verdict {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border: 1px solid;
+      color: var(--good);
+      border-color: var(--good);
+      flex-shrink: 0;
+    }
+    .triage-row.bad .triage-verdict { color: var(--text-3); border-color: var(--text-3); }
+
+    /* =========================================================================
+       Heal theater
+       ========================================================================= */
+    .heal-stage {
+      display: grid;
+      grid-template-columns: 1fr 1.4fr;
+      gap: 0;
+      border: 1px solid var(--border-soft);
+      background: var(--bg-2);
+    }
+    .heal-left, .heal-right {
+      padding: 18px 20px;
+    }
+    .heal-left {
+      border-right: 1px solid var(--border-soft);
+    }
+    .heal-bug-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-3);
+      margin-bottom: 6px;
+    }
+    .heal-bug {
+      font-size: 14px;
+      line-height: 1.55;
+      color: var(--text-0);
+      margin-bottom: 16px;
+    }
+    .heal-meta {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-2);
+      letter-spacing: 0.04em;
+      display: grid;
+      grid-template-columns: 80px 1fr;
+      gap: 6px 12px;
+    }
+    .heal-meta .lk { color: var(--text-3); text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; padding-top: 2px; }
+
+    .heal-trace {
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--text-1);
+      max-height: 360px;
+      overflow-y: auto;
+    }
+    .heal-trace::-webkit-scrollbar { width: 6px; }
+    .heal-trace::-webkit-scrollbar-track { background: var(--bg-2); }
+    .heal-trace::-webkit-scrollbar-thumb { background: var(--border); }
+    .trace-event {
+      padding: 6px 0;
+      border-bottom: 1px dashed var(--border-soft);
+      opacity: 0;
+      transform: translateY(4px);
+      animation: traceIn 0.35s ease forwards;
+    }
+    .trace-event:last-child { border-bottom: none; }
+    @keyframes traceIn { to { opacity: 1; transform: translateY(0); } }
+
+    .trace-head {
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+    }
+    .trace-iter {
+      color: var(--text-3);
+      flex-shrink: 0;
+      width: 28px;
+    }
+    .trace-name {
+      color: var(--accent);
+      font-weight: 500;
+    }
+    .trace-args {
+      color: var(--text-2);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .trace-detail {
+      margin-left: 38px;
+      margin-top: 4px;
+      color: var(--text-2);
+      font-size: 11px;
+    }
+    .trace-pass { color: var(--good); }
+    .trace-fail { color: var(--bad); }
+
+    .diff-block {
+      margin-top: 6px;
+      margin-left: 38px;
+      background: var(--bg-0);
+      border: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.5;
+      padding: 8px 12px;
+      max-height: 240px;
+      overflow-y: auto;
+    }
+    .diff-line { white-space: pre; }
+    .diff-line.add  { color: var(--good); }
+    .diff-line.del  { color: var(--bad); }
+    .diff-line.hunk { color: var(--info); }
+    .diff-line.ctx  { color: var(--text-2); }
+
+    /* =========================================================================
+       Scoreboard
+       ========================================================================= */
+    .scoreboard {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 16px;
+    }
+    .score-cell {
+      background: var(--bg-2);
+      border: 1px solid var(--border-soft);
+      padding: 18px 20px;
+      position: relative;
+    }
+    .score-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-2);
+      margin-bottom: 8px;
+    }
+    .score-value {
+      font-family: var(--mono);
+      font-size: 28px;
+      font-weight: 500;
+      color: var(--accent);
+      line-height: 1;
+    }
+    .score-value.good  { color: var(--good); }
+    .score-value.muted { color: var(--text-1); }
+    .score-sub {
+      margin-top: 4px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-3);
+    }
+
+    /* =========================================================================
+       Reset / drop zone state
+       ========================================================================= */
+    .empty-state {
+      text-align: center;
+      padding: 80px 24px;
+      color: var(--text-2);
+    }
+    .empty-state h2 {
+      font-family: var(--mono);
+      font-size: 16px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-1);
+      margin: 0 0 8px;
+    }
+    .empty-state p {
+      font-size: 14px;
+      color: var(--text-2);
+      margin: 0 0 20px;
+    }
+    .empty-state .hint {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-3);
+      letter-spacing: 0.04em;
+    }
+
+    /* =========================================================================
+       Animations
+       ========================================================================= */
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.35; }
+    }
+    @keyframes panelIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .panel.show {
+      animation: panelIn 0.5s ease both;
+    }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+
+    <!-- ========== Top bar ========== -->
+    <div class="topbar">
+      <div class="brand">
+        <div class="brand-mark">Σ</div>
+        <div class="brand-text">
+          <div class="brand-title">Adaptive Self-Healing Engineer</div>
+          <div class="brand-subtitle">AI personas · Codex orchestration · Verified fixes</div>
+        </div>
+      </div>
+      <div class="topbar-meta">
+        <div><span class="key">Target</span><span class="val" id="meta-target">—</span></div>
+        <div><span class="key">Spotlight</span><span class="val" id="meta-spotlight">—</span></div>
+        <div><span class="clock-dot"></span><span id="meta-elapsed">00:00</span></div>
+      </div>
+    </div>
+
+    <!-- ========== Controls ========== -->
+    <div class="controls">
+      <label for="file-input">Transcript</label>
+      <button class="btn" id="btn-pick">Choose file…</button>
+      <input type="file" id="file-input" accept=".json" />
+      <span style="color: var(--text-3); margin-left: 8px;" id="file-name">no file loaded</span>
+
+      <div class="spacer"></div>
+
+      <span style="color: var(--text-2);">Speed</span>
+      <div class="speed-group">
+        <button class="btn" data-speed="1">1×</button>
+        <button class="btn active" data-speed="2">2×</button>
+        <button class="btn" data-speed="4">4×</button>
+        <button class="btn" data-speed="8">8×</button>
+      </div>
+
+      <button class="btn" id="btn-restart" disabled>Restart</button>
+      <button class="btn btn-primary" id="btn-play" disabled>Play ▶</button>
+
+      <span class="stage-pill" id="stage-pill">IDLE</span>
+    </div>
+
+    <!-- ========== Empty state ========== -->
+    <div id="empty-state" class="empty-state">
+      <h2>Awaiting Transcript</h2>
+      <p>Load a transcript produced by <code style="color: var(--accent); font-family: var(--mono);">python -m orchestrator.full_loop</code></p>
+      <p class="hint">Default location: <code style="color: var(--text-2); font-family: var(--mono);">personas/reports/full_loop_*.json</code></p>
+    </div>
+
+    <!-- ========== Discovery panel ========== -->
+    <div class="panel hidden" id="panel-discovery">
+      <div class="panel-header">
+        <div class="panel-title">Stage 01 · Discovery — 3 personas exploring in parallel</div>
+        <div class="panel-meta" id="discovery-meta">—</div>
+      </div>
+      <div class="panel-body">
+        <div class="persona-grid" id="persona-grid"></div>
+      </div>
+    </div>
+
+    <!-- ========== Triage panel ========== -->
+    <div class="panel hidden" id="panel-triage">
+      <div class="panel-header">
+        <div class="panel-title">Stage 02 · Triage — separating signal from noise</div>
+        <div class="panel-meta" id="triage-meta">—</div>
+      </div>
+      <div class="panel-body">
+        <div class="triage-list" id="triage-list"></div>
+      </div>
+    </div>
+
+    <!-- ========== Heal panel ========== -->
+    <div class="panel hidden" id="panel-heal">
+      <div class="panel-header">
+        <div class="panel-title">Stage 03 · Codex Heals — autonomous diagnose, patch, validate</div>
+        <div class="panel-meta" id="heal-meta">—</div>
+      </div>
+      <div class="panel-body" id="heal-body"></div>
+    </div>
+
+    <!-- ========== Re-validation panel ========== -->
+    <div class="panel hidden" id="panel-reval">
+      <div class="panel-header">
+        <div class="panel-title">Stage 04 · Re-validation — Kelvin re-checks the patched site</div>
+        <div class="panel-meta" id="reval-meta">—</div>
+      </div>
+      <div class="panel-body">
+        <div class="persona-grid" id="reval-grid" style="grid-template-columns: 1fr;"></div>
+        <div class="triage-list" id="reval-triage-list" style="margin-top: 20px;"></div>
+      </div>
+    </div>
+
+    <!-- ========== Scoreboard ========== -->
+    <div class="panel hidden" id="panel-score">
+      <div class="panel-header">
+        <div class="panel-title">Final Report</div>
+        <div class="panel-meta" id="score-meta">—</div>
+      </div>
+      <div class="panel-body">
+        <div class="scoreboard" id="scoreboard"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // =========================================================================
+    // Constants & state
+    // =========================================================================
+    const PERSONA_COLORS = {
+      priya:  'var(--persona-1)',
+      kelvin: 'var(--persona-2)',
+      hassan: 'var(--persona-3)',
+    };
+    const PERSONA_INITIALS = {
+      priya:  'PK',
+      kelvin: 'KT',
+      hassan: 'HN',
+    };
+
+    const state = {
+      transcript: null,
+      timeline: [],     // array of {t_ms, fn}
+      playing: false,
+      speedMultiplier: 2,
+      restartFromZero: true,
+      timers: [],
+      elapsedTimer: null,
+      stageElapsed: 0,
+    };
+
+    // =========================================================================
+    // DOM refs
+    // =========================================================================
+    const $ = (id) => document.getElementById(id);
+    const fileInput   = $('file-input');
+    const btnPick     = $('btn-pick');
+    const fileName    = $('file-name');
+    const btnPlay     = $('btn-play');
+    const btnRestart  = $('btn-restart');
+    const stagePill   = $('stage-pill');
+    const emptyState  = $('empty-state');
+    const elapsedEl   = $('meta-elapsed');
+
+    // =========================================================================
+    // File picking
+    // =========================================================================
+    btnPick.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      fileName.textContent = file.name;
+      try {
+        const text = await file.text();
+        const json = JSON.parse(text);
+        loadTranscript(json);
+      } catch (err) {
+        alert('Failed to parse transcript: ' + err.message);
+      }
+    });
+
+    // Speed buttons
+    document.querySelectorAll('.speed-group .btn').forEach(b => {
+      b.addEventListener('click', () => {
+        document.querySelectorAll('.speed-group .btn').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        state.speedMultiplier = parseFloat(b.dataset.speed);
+      });
+    });
+
+    btnPlay.addEventListener('click', () => {
+      if (state.playing) return;
+      play();
+    });
+    btnRestart.addEventListener('click', () => {
+      stopAll();
+      reset();
+      if (state.transcript) {
+        loadTranscript(state.transcript);
+      }
+    });
+
+    // =========================================================================
+    // Transcript loading & timeline construction
+    // =========================================================================
+    function loadTranscript(t) {
+      state.transcript = t;
+      reset();
+
+      // Top bar meta
+      $('meta-target').textContent = t.target || '—';
+      $('meta-spotlight').textContent = t.spotlight || '—';
+
+      // Build the timeline of UI events to schedule during playback.
+      buildTimeline();
+
+      emptyState.classList.add('hidden');
+      btnPlay.disabled = false;
+      btnRestart.disabled = false;
+      stagePill.textContent = 'READY';
+    }
+
+    function buildTimeline() {
+      const tl = [];
+      const t = state.transcript;
+      let cursor = 0;
+
+      // --- Stage 1: discovery ---
+      tl.push({ t: cursor, fn: () => showPanel('panel-discovery', 'DISCOVERY') });
+      cursor += 400;
+
+      const personas = Object.keys(t.discovery || {});
+      // Prep tiles
+      for (const pid of personas) {
+        const rpt = t.discovery[pid];
+        tl.push({ t: cursor, fn: () => createPersonaTile('persona-grid', pid, rpt) });
+        cursor += 220;
+      }
+      cursor += 300;
+
+      // Stream observations across personas, interleaved by their original timing
+      const allObs = [];
+      for (const pid of personas) {
+        const rpt = t.discovery[pid];
+        const rptStart = rpt.started_at || t.started_at;
+        const baseOffset = (rptStart - t.started_at) * 1000;
+        (rpt.observations || []).forEach((o, idx) => {
+          // Step duration: ~2.5s per observation seems realistic for the
+          // browser + LLM round-trip; we collapse this to 1.2s in playback
+          // independent of wall-clock to keep the demo moving.
+          allObs.push({
+            pid,
+            obs: o,
+            scheduled_ms: baseOffset + idx * 1500,
+            isLast: idx === (rpt.observations || []).length - 1,
+          });
+        });
+      }
+      // Sort by scheduled time, then slot them in
+      allObs.sort((a, b) => a.scheduled_ms - b.scheduled_ms);
+      const obsStart = cursor;
+      for (const item of allObs) {
+        const at = obsStart + (item.scheduled_ms * 0.6);  // compress 40%
+        tl.push({ t: at, fn: () => updatePersonaTile(item.pid, item.obs) });
+      }
+      const obsEnd = obsStart + (allObs.length ? allObs[allObs.length - 1].scheduled_ms * 0.6 : 0) + 800;
+      cursor = obsEnd;
+
+      // Mark each persona as "done" with their final report
+      for (const pid of personas) {
+        const rpt = t.discovery[pid];
+        tl.push({ t: cursor, fn: () => finalisePersonaTile(pid, rpt) });
+        cursor += 350;
+      }
+      cursor += 600;
+
+      // --- Stage 2: triage ---
+      const triage = t.triage || [];
+      if (triage.length > 0) {
+        tl.push({ t: cursor, fn: () => showPanel('panel-triage', 'TRIAGE') });
+        cursor += 400;
+        const triageBody = $('triage-list');
+        triage.forEach((item, i) => {
+          tl.push({
+            t: cursor + i * 700,
+            fn: () => appendTriageRow(triageBody, item),
+          });
+        });
+        cursor += triage.length * 700 + 400;
+        tl.push({ t: cursor, fn: () => updateTriageMeta(triage) });
+        cursor += 300;
+      }
+
+      // --- Stage 3: heals ---
+      const heals = t.heals || [];
+      if (heals.length > 0) {
+        tl.push({ t: cursor, fn: () => showPanel('panel-heal', 'CODEX HEALING') });
+        cursor += 400;
+        heals.forEach((heal, i) => {
+          tl.push({ t: cursor, fn: () => beginHeal(i, heal) });
+          cursor += 600;
+          // Stream events
+          (heal.events || []).forEach((ev, j) => {
+            tl.push({
+              t: cursor,
+              fn: () => appendHealEvent(i, ev),
+            });
+            // Pace tool calls: diffs get more dwell time, others move along
+            cursor += ev.name === 'write_file' ? 1300 : 700;
+          });
+          // Final mark
+          tl.push({ t: cursor, fn: () => finaliseHeal(i, heal) });
+          cursor += 800;
+        });
+      }
+
+      // --- Stage 4: revalidation ---
+      const reval = t.revalidation;
+      if (reval) {
+        tl.push({ t: cursor, fn: () => showPanel('panel-reval', 'RE-VALIDATION') });
+        cursor += 400;
+        const revalPid = t.revalidator || 'kelvin';
+        tl.push({ t: cursor, fn: () => {
+          createPersonaTile('reval-grid', revalPid, reval);
+        } });
+        cursor += 400;
+        (reval.observations || []).forEach((o, i) => {
+          tl.push({
+            t: cursor + i * 1200,
+            fn: () => updatePersonaTile(revalPid, o),
+          });
+        });
+        cursor += (reval.observations || []).length * 1200 + 400;
+        tl.push({ t: cursor, fn: () => finalisePersonaTile(revalPid, reval) });
+        cursor += 400;
+
+        const rTriage = t.revalidation_triage || [];
+        rTriage.forEach((item, i) => {
+          tl.push({
+            t: cursor + i * 600,
+            fn: () => appendTriageRow($('reval-triage-list'), item, true),
+          });
+        });
+        cursor += rTriage.length * 600 + 400;
+      }
+
+      // --- Stage 5: scoreboard ---
+      tl.push({ t: cursor, fn: () => showPanel('panel-score', 'COMPLETE') });
+      cursor += 300;
+      tl.push({ t: cursor, fn: () => renderScoreboard(t) });
+      cursor += 400;
+      tl.push({ t: cursor, fn: () => {
+        stagePill.textContent = 'COMPLETE';
+        stopElapsed();
+      }});
+
+      state.timeline = tl;
+    }
+
+    // =========================================================================
+    // Playback
+    // =========================================================================
+    function play() {
+      if (!state.timeline.length) return;
+      state.playing = true;
+      btnPlay.disabled = true;
+      stagePill.textContent = 'PLAYING';
+      startElapsed();
+      const start = performance.now();
+      for (const ev of state.timeline) {
+        const delay = ev.t / state.speedMultiplier;
+        const id = setTimeout(() => ev.fn(), delay);
+        state.timers.push(id);
+      }
+      // After last event, mark playing false
+      const last = state.timeline[state.timeline.length - 1];
+      const finalDelay = last.t / state.speedMultiplier + 100;
+      const id = setTimeout(() => {
+        state.playing = false;
+        btnPlay.disabled = false;
+        btnPlay.textContent = 'Replay ▶';
+      }, finalDelay);
+      state.timers.push(id);
+    }
+
+    function stopAll() {
+      state.timers.forEach(id => clearTimeout(id));
+      state.timers = [];
+      stopElapsed();
+      state.playing = false;
+      btnPlay.disabled = false;
+      btnPlay.textContent = 'Play ▶';
+    }
+
+    function reset() {
+      stopAll();
+      // Hide all panels except empty state
+      ['panel-discovery', 'panel-triage', 'panel-heal', 'panel-reval', 'panel-score']
+        .forEach(id => {
+          const el = $(id);
+          el.classList.add('hidden');
+          el.classList.remove('show', 'active', 'complete');
+        });
+      $('persona-grid').innerHTML = '';
+      $('triage-list').innerHTML = '';
+      $('heal-body').innerHTML = '';
+      $('reval-grid').innerHTML = '';
+      $('reval-triage-list').innerHTML = '';
+      $('scoreboard').innerHTML = '';
+      elapsedEl.textContent = '00:00';
+      state.stageElapsed = 0;
+      stagePill.textContent = 'IDLE';
+    }
+
+    function startElapsed() {
+      const t0 = Date.now();
+      state.elapsedTimer = setInterval(() => {
+        const ms = Date.now() - t0;
+        const total = Math.floor(ms / 1000);
+        const m = String(Math.floor(total / 60)).padStart(2, '0');
+        const s = String(total % 60).padStart(2, '0');
+        elapsedEl.textContent = `${m}:${s}`;
+      }, 250);
+    }
+    function stopElapsed() {
+      if (state.elapsedTimer) {
+        clearInterval(state.elapsedTimer);
+        state.elapsedTimer = null;
+      }
+    }
+
+    // =========================================================================
+    // Panel + persona rendering
+    // =========================================================================
+    function showPanel(id, stageLabel) {
+      const el = $(id);
+      el.classList.remove('hidden');
+      el.classList.add('show', 'active');
+      // Mark previous panels complete
+      const order = ['panel-discovery', 'panel-triage', 'panel-heal', 'panel-reval', 'panel-score'];
+      const idx = order.indexOf(id);
+      order.slice(0, idx).forEach(prev => {
+        const p = $(prev);
+        if (!p.classList.contains('hidden')) {
+          p.classList.remove('active');
+          p.classList.add('complete');
+        }
+      });
+      if (stageLabel) stagePill.textContent = stageLabel;
+    }
+
+    function createPersonaTile(parentId, pid, rpt) {
+      const tile = document.createElement('div');
+      tile.className = 'persona-tile active';
+      tile.id = `tile-${pid}`;
+      const color = PERSONA_COLORS[pid] || 'var(--accent)';
+      tile.style.setProperty('--persona-color', color);
+
+      const initials = PERSONA_INITIALS[pid] || pid.slice(0, 2).toUpperCase();
+      const name = rpt.persona_name || pid;
+      const archetype = (rpt.observations?.[0] || {}).persona_thought
+        ? '' // we'll fill below
+        : '';
+      // Get archetype from observations metadata if available — fall back to id
+      const archLabel = pid === 'priya' ? 'Deal hunter'
+                       : pid === 'kelvin' ? 'Price sensitive'
+                       : pid === 'hassan' ? 'Comparison shopper'
+                       : pid;
+
+      tile.innerHTML = `
+        <div class="persona-header">
+          <div class="persona-avatar">${initials}</div>
+          <div class="persona-identity">
+            <div class="persona-name">${escapeHtml(name)}</div>
+            <div class="persona-archetype">${archLabel}</div>
+          </div>
+          <div class="persona-status thinking" data-status="thinking">Browsing</div>
+        </div>
+        <div class="persona-thought empty">awaiting first observation…</div>
+        <div class="persona-footer">
+          <div class="persona-action">idle</div>
+          <div class="persona-step">step 0</div>
+        </div>
+      `;
+      $(parentId).appendChild(tile);
+    }
+
+    function updatePersonaTile(pid, obs) {
+      const tile = $(`tile-${pid}`);
+      if (!tile) return;
+      const thoughtEl = tile.querySelector('.persona-thought');
+      const actionEl  = tile.querySelector('.persona-action');
+      const stepEl    = tile.querySelector('.persona-step');
+
+      thoughtEl.classList.remove('empty');
+      thoughtEl.textContent = obs.persona_thought || '';
+      const a = obs.action_taken || {};
+      const actDesc =
+        a.type === 'click'    ? `click "${a.text || '?'}"`
+      : a.type === 'fill'     ? `fill ${a.selector || '?'} ← "${a.value || ''}"`
+      : a.type === 'navigate' ? `navigate ${a.url || '?'}`
+      : a.type === 'done'     ? `done`
+      :                          a.type || '?';
+      actionEl.textContent = actDesc;
+      stepEl.textContent = `step ${obs.step}`;
+    }
+
+    function finalisePersonaTile(pid, rpt) {
+      const tile = $(`tile-${pid}`);
+      if (!tile) return;
+      tile.classList.remove('active');
+      tile.classList.add('done');
+      const status = tile.querySelector('.persona-status');
+      const thoughtEl = tile.querySelector('.persona-thought');
+      const bugs = (rpt.possible_bugs || []).length;
+      if (bugs > 0) {
+        status.classList.remove('thinking');
+        status.classList.add('flagged');
+        status.textContent = `${bugs} bug${bugs > 1 ? 's' : ''} flagged`;
+        tile.classList.add('bug-found');
+      } else {
+        status.classList.remove('thinking');
+        status.classList.add('clean');
+        status.textContent = 'no bugs found';
+      }
+      // Replace last thought with the persona's final assessment
+      if (rpt.final_assessment) {
+        thoughtEl.textContent = rpt.final_assessment;
+        thoughtEl.classList.remove('empty');
+      }
+    }
+
+    // =========================================================================
+    // Triage
+    // =========================================================================
+    function appendTriageRow(parent, item, isRevalidation = false) {
+      const isReal = item.verdict === 'real';
+      const isDup  = item.verdict === 'duplicate';
+      const cls = isReal ? 'real' : 'bad';
+      const iconChar = isReal ? '✓' : (isDup ? '∥' : '⊘');
+      const verdictText = isRevalidation
+        ? (isReal ? 'REGRESSION' : isDup ? 'DUPLICATE' : 'NOISE')
+        : (isReal ? 'REAL BUG' : isDup ? 'DUPLICATE' : 'NOT A BUG');
+
+      const bug = (item.bug || '').replace(/\s+/g, ' ').trim();
+      const shortBug = bug.length > 220 ? bug.slice(0, 217) + '…' : bug;
+
+      const row = document.createElement('div');
+      row.className = `triage-row ${cls}`;
+      row.innerHTML = `
+        <div class="triage-icon">${iconChar}</div>
+        <div class="triage-source">${escapeHtml(item.persona_id || '?')}</div>
+        <div class="triage-content">
+          <div class="triage-bug">${escapeHtml(shortBug)}</div>
+          <div class="triage-reason">${escapeHtml(item.reasoning || '')}</div>
+        </div>
+        <div class="triage-verdict">${verdictText}</div>
+      `;
+      parent.appendChild(row);
+      // Trigger CSS transition next frame
+      requestAnimationFrame(() => row.classList.add('shown'));
+    }
+
+    function updateTriageMeta(triage) {
+      const real = triage.filter(t => t.verdict === 'real').length;
+      const total = triage.length;
+      $('triage-meta').textContent = `${real} verified of ${total} raw reports`;
+    }
+
+    // =========================================================================
+    // Heal stage
+    // =========================================================================
+    function beginHeal(i, heal) {
+      const wrap = document.createElement('div');
+      wrap.className = 'heal-stage';
+      wrap.id = `heal-${i}`;
+      wrap.style.marginBottom = '20px';
+      wrap.innerHTML = `
+        <div class="heal-left">
+          <div class="heal-bug-label">Bug ${i + 1} / ${state.transcript.heals.length}</div>
+          <div class="heal-bug">${escapeHtml((heal.bug_description || '').slice(0, 360))}</div>
+          <div class="heal-meta">
+            <div class="lk">Model</div><div>${escapeHtml(heal.model_used || '—')}</div>
+            <div class="lk">Iter cap</div><div>10 tool calls max</div>
+            <div class="lk">Status</div><div id="heal-${i}-status" style="color: var(--accent);">in progress…</div>
+            <div class="lk">Duration</div><div id="heal-${i}-dur">—</div>
+            <div class="lk">Files</div><div>${(heal.modified_files || []).map(escapeHtml).join(', ') || '—'}</div>
+          </div>
+        </div>
+        <div class="heal-right">
+          <div class="heal-bug-label">Codex tool calls</div>
+          <div class="heal-trace" id="heal-${i}-trace"></div>
+        </div>
+      `;
+      $('heal-body').appendChild(wrap);
+    }
+
+    function appendHealEvent(healIdx, ev) {
+      const traceEl = $(`heal-${healIdx}-trace`);
+      if (!traceEl) return;
+
+      const eventDiv = document.createElement('div');
+      eventDiv.className = 'trace-event';
+
+      let detailHtml = '';
+      if (ev.name === 'read_file' || ev.name === 'list_files') {
+        const argStr = previewArgs(ev.arguments_preview);
+        eventDiv.innerHTML = `
+          <div class="trace-head">
+            <span class="trace-iter">${String(ev.iteration).padStart(2, '0')}</span>
+            <span class="trace-name">${ev.name}</span>
+            <span class="trace-args">${escapeHtml(argStr)}</span>
+          </div>
+        `;
+      } else if (ev.name === 'write_file') {
+        const argStr = previewArgs(ev.arguments_preview);
+        eventDiv.innerHTML = `
+          <div class="trace-head">
+            <span class="trace-iter">${String(ev.iteration).padStart(2, '0')}</span>
+            <span class="trace-name">${ev.name}</span>
+            <span class="trace-args">${escapeHtml(argStr)}</span>
+          </div>
+          ${ev.diff ? renderDiff(ev.diff) : ''}
+        `;
+      } else if (ev.name === 'run_tests') {
+        const argStr = previewArgs(ev.arguments_preview);
+        const result = safeParse(ev.result_preview) || {};
+        const passed = result.passed;
+        const detailColor = passed ? 'var(--good)' : 'var(--bad)';
+        const detailText = passed ? '✓ tests passed' : '✗ tests failed';
+        eventDiv.innerHTML = `
+          <div class="trace-head">
+            <span class="trace-iter">${String(ev.iteration).padStart(2, '0')}</span>
+            <span class="trace-name">${ev.name}</span>
+            <span class="trace-args">${escapeHtml(argStr)}</span>
+          </div>
+          <div class="trace-detail" style="color: ${detailColor};">${detailText}</div>
+        `;
+      } else if (ev.name === 'done') {
+        const args = safeParse(ev.arguments_preview) || {};
+        eventDiv.innerHTML = `
+          <div class="trace-head">
+            <span class="trace-iter">${String(ev.iteration).padStart(2, '0')}</span>
+            <span class="trace-name">done</span>
+          </div>
+          <div class="trace-detail" style="color: var(--good);">${escapeHtml(args.summary || '')}</div>
+        `;
+      } else {
+        eventDiv.innerHTML = `
+          <div class="trace-head">
+            <span class="trace-iter">${String(ev.iteration).padStart(2, '0')}</span>
+            <span class="trace-name">${escapeHtml(ev.name)}</span>
+          </div>
+        `;
+      }
+
+      traceEl.appendChild(eventDiv);
+      traceEl.scrollTop = traceEl.scrollHeight;
+    }
+
+    function finaliseHeal(i, heal) {
+      const status = $(`heal-${i}-status`);
+      const dur    = $(`heal-${i}-dur`);
+      if (status) {
+        if (heal.success) {
+          status.textContent = '✓ healed';
+          status.style.color = 'var(--good)';
+        } else {
+          status.textContent = '✗ failed';
+          status.style.color = 'var(--bad)';
+        }
+      }
+      if (dur) {
+        dur.textContent = `${(heal.duration_seconds || 0).toFixed(1)}s · ${heal.iterations || 0} iter`;
+      }
+    }
+
+    // =========================================================================
+    // Scoreboard
+    // =========================================================================
+    function renderScoreboard(t) {
+      const sb = $('scoreboard');
+      const heals = t.heals || [];
+      const triage = t.triage || [];
+      const successfulHeals = heals.filter(h => h.success).length;
+      const failedHeals = heals.length - successfulHeals;
+      const real = triage.filter(x => x.verdict === 'real').length;
+      const noise = triage.filter(x => x.verdict !== 'real').length;
+      const revalReal = (t.revalidation_triage || []).filter(x => x.verdict === 'real').length;
+      const wall = (t.ended_at && t.started_at) ? (t.ended_at - t.started_at) : 0;
+
+      const cells = [
+        { label: 'Bugs found',     value: real,             sub: `${noise} noise filtered`, kind: 'good' },
+        { label: 'Codex heals',    value: `${successfulHeals}/${heals.length}`, sub: 'autonomous fix loop', kind: successfulHeals === heals.length ? 'good' : '' },
+        { label: 'Regressions',    value: revalReal,        sub: revalReal === 0 ? 'verified clean' : 'needs attention', kind: revalReal === 0 ? 'good' : '' },
+        { label: 'Wall time',      value: `${formatDuration(wall)}`, sub: 'discovery → heal → verify', kind: 'muted' },
+        { label: 'Models used',    value: `2`, sub: 'gpt-4o-mini + gpt-5-codex', kind: 'muted' },
+      ];
+      sb.innerHTML = '';
+      cells.forEach((c, idx) => {
+        const el = document.createElement('div');
+        el.className = 'score-cell';
+        el.innerHTML = `
+          <div class="score-label">${c.label}</div>
+          <div class="score-value ${c.kind}">${c.value}</div>
+          <div class="score-sub">${c.sub}</div>
+        `;
+        sb.appendChild(el);
+        // Stagger appearance
+        el.style.opacity = '0';
+        el.style.transform = 'translateY(8px)';
+        setTimeout(() => {
+          el.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+          el.style.opacity = '1';
+          el.style.transform = 'translateY(0)';
+        }, idx * 80);
+      });
+    }
+
+    // =========================================================================
+    // Utilities
+    // =========================================================================
+    function previewArgs(s) {
+      if (!s) return '';
+      const parsed = safeParse(s);
+      if (!parsed) return s.length > 80 ? s.slice(0, 77) + '…' : s;
+      // Try to render the most relevant keys
+      if (parsed.path) return parsed.path;
+      if (parsed.test_path) return parsed.test_path;
+      if (parsed.subdir !== undefined) return `${parsed.subdir || '(root)'} ${parsed.pattern || ''}`.trim();
+      return JSON.stringify(parsed).slice(0, 80);
+    }
+
+    function safeParse(s) {
+      if (typeof s !== 'string') return s || null;
+      try { return JSON.parse(s); } catch { return null; }
+    }
+
+    function renderDiff(diff) {
+      if (!diff) return '';
+      const lines = diff.split('\n').slice(0, 40);
+      const html = lines.map(line => {
+        if (line.startsWith('+++') || line.startsWith('---')) {
+          return `<div class="diff-line hunk">${escapeHtml(line)}</div>`;
+        }
+        if (line.startsWith('@@')) {
+          return `<div class="diff-line hunk">${escapeHtml(line)}</div>`;
+        }
+        if (line.startsWith('+')) {
+          return `<div class="diff-line add">${escapeHtml(line)}</div>`;
+        }
+        if (line.startsWith('-')) {
+          return `<div class="diff-line del">${escapeHtml(line)}</div>`;
+        }
+        return `<div class="diff-line ctx">${escapeHtml(line)}</div>`;
+      }).join('');
+      return `<div class="diff-block">${html}</div>`;
+    }
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      return String(s)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function formatDuration(sec) {
+      if (!sec || sec < 0) return '—';
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return m > 0 ? `${m}m ${s}s` : `${s}s`;
+    }
+  </script>
+</body>
+</html>

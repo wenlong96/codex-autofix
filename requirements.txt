@@ -1,0 +1,20 @@
+# Consolidated dependencies for the whole project.
+# Install once from the repo root:  pip install -r requirements.txt
+
+# --- Prototype (FastAPI backend) ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.9.0
+httpx>=0.27.0
+
+# --- Personas (browser-driving AI shoppers) ---
+playwright>=1.48.0
+google-genai>=1.0.0
+openai>=1.50.0
+python-dotenv>=1.0.0
+
+# --- Orchestrator (Codex heal loop + verifier) ---
+# (openai and python-dotenv already listed above)
+
+# --- Testing ---
+pytest>=8.0.0
