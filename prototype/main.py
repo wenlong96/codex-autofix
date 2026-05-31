@@ -167,11 +167,12 @@ async def log_requests(request: Request, call_next):
 @app.get("/api/products")
 def list_products():
     """List all products, with a homepage flash-discount price for display."""
+    HOMEPAGE_DISCOUNT = 0.08
     with get_db() as conn:
         rows = conn.execute("SELECT * FROM products").fetchall()
         products = [dict(r) for r in rows]
         for p in products:
-            p["display_price"] = round(p["price"], 2)
+            p["display_price"] = round(p["price"] * (1 - HOMEPAGE_DISCOUNT), 2)
         return products
 
 
@@ -234,12 +235,10 @@ def get_team(team_id: str):
             "SELECT * FROM products WHERE id = ?", (team["product_id"],)
         ).fetchone()
 
-        member_count = len(members)
-        complete = member_count >= 2
+        complete = len(members) >= 2
 
         expected_member_count = 2
-        applicable_member_count = min(member_count, expected_member_count)
-        total_savings = product["price"] * TEAM_DISCOUNT * applicable_member_count
+        total_savings = product["price"] * TEAM_DISCOUNT * expected_member_count
 
         return {
             "team": dict(team),
@@ -248,7 +247,7 @@ def get_team(team_id: str):
             "complete": complete,
             "discount_pct": TEAM_DISCOUNT * 100,
             "total_savings": round(total_savings, 2),
-            "member_count": member_count,
+            "member_count": len(members),
         }
 
 
@@ -309,11 +308,8 @@ def checkout(req: CheckoutRequest):
 
         promo_applied = False
         promo_code_echoed = req.promo_code
-        if req.promo_code:
-            normalized_code = req.promo_code.strip().upper()
-            if normalized_code == "SAVE10":
-                promo_applied = True
-                total = total * 0.90
+        if req.promo_code and req.promo_code.strip().upper() == "SAVE10":
+            promo_applied = True
 
         order_id = str(uuid.uuid4())[:8]
         conn.execute(
