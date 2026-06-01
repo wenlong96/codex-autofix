@@ -1,0 +1,138 @@
+================================================================================
+AGENT ROSTER — TARGET TEAM
+================================================================================
+
+Planning doc for the holistic agent team. This lists the agents we AIM to build,
+grouped by tier. It is a target/wishlist, not a description of what exists today.
+
+WHAT EXISTS TODAY (baseline, for reference):
+  - 3 discovery personas: kelvin, priya, hassan (persona_profiles.py)
+  - A verifier that FILTERS reports (real / misunderstanding / duplicate) one at
+    a time, threading prior accepted reports for dedup (orchestrator/verifier.py)
+  - NOTE: there is no true "synthesizer" yet. aggregate_bugs() just flattens all
+    reports into one list; the verifier only filters + flags duplicates. It does
+    NOT merge/cluster overlapping reports into one canonical bug. That capability
+    is the Tier 3 "Triage / Dedup" agent below.
+
+TWO AXES THAT MAKE THE TEAM "HOLISTIC":
+  - LAYER touched:  UI  ->  API  ->  DATA  ->  INFRA
+  - INTENT driving: honest use / abuse / accessibility / performance / content
+
+Every new agent emits the SAME structured bug-report schema so the existing
+verifier -> Codex heal -> re-validation pipeline stays unchanged.
+
+
+================================================================================
+TIER 1 — PERSONA-SHAPED AGENTS
+(reuse the existing Persona dataclass + browser/vision loop; lowest effort)
+================================================================================
+
+[ ] The Adversary / Scammer        archetype: adversarial
+      Mechanism: drives the API directly (or tampers form fields) with hostile
+                 inputs — negative/zero/huge quantities, spoofed user_id,
+                 replayed requests.
+      Unlocks:   the currently-unreachable backend bugs (negative quantity,
+                 creator-joins-own-team).
+
+[ ] The Confused / Low-tech User   archetype: low_tech
+      Mechanism: double-clicks, hits Back mid-flow, refreshes, abandons carts,
+                 mis-types.
+      Unlocks:   idempotency / double-submit / broken back-button state bugs.
+
+[ ] The Accessibility User         archetype: a11y
+      Mechanism: reads the DOM / ARIA tree instead of the screenshot;
+                 keyboard-only navigation.
+      Unlocks:   missing labels, contrast issues, focus traps, unlabeled inputs.
+
+[ ] The Mobile / Small-screen User archetype: mobile
+      Mechanism: same loop, narrow viewport.
+      Unlocks:   responsive breakage, overflow, tap-target size.
+
+
+================================================================================
+TIER 2 — INSPECTOR AGENTS (non-persona)
+(new mechanism, SAME verifier -> Codex backend; this is what truly closes the
+ backend gap that personas physically cannot reach)
+================================================================================
+
+[ ] API Fuzzer / Contract Agent
+      Hits endpoints directly with boundary values; checks status codes &
+      response schema against a contract/OpenAPI spec. The HONEST path to
+      backend bugs (no vision model guessing).
+
+[ ] Performance / Load Agent
+      Times requests; flags N+1 queries, slow endpoints, payload bloat.
+      A whole class of bugs personas literally cannot perceive.
+
+[ ] Security / Auth Agent
+      IDOR, missing authorization, injection probes, secrets leaking in
+      responses. Where this project is currently most exposed.
+
+[ ] Data-Integrity Agent
+      Reads the DB / seed after flows; checks invariants (no negative totals,
+      FK consistency, no float rounding drift persisted). Catches corruption
+      the UI hides.
+
+[ ] Content / Copy Agent
+      Checks price/label/currency consistency across pages, broken links, i18n.
+      Generalizes Hassan from "one product" to "the whole catalogue".
+
+
+================================================================================
+TIER 3 — META-AGENTS
+(agents whose job is the OTHER agents; turns a cast into a team that adapts to
+ any site and speaks with one voice)
+================================================================================
+
+[ ] Coordinator / Router
+      Given any target site, inspects what it actually is (checkout? login?
+      admin panel? API?) and selects the relevant subset of agents + tells each
+      what to focus on. This is what makes "covers all kinds of websites" true.
+      HARDEST and most brittle piece — aspirational; manual select/deselect
+      covers most of its value safely.
+
+[ ] Triage / Dedup Agent (the real "synthesizer")
+      Promotes the existing verifier into a first-class member that looks ACROSS
+      all agents at once and CLUSTERS overlapping reports into one canonical bug
+      (e.g. adversary + confused user + data-integrity all describing the same
+      negative-quantity bug -> one bug, not three). Today's verifier can only
+      reject a duplicate; this agent MERGES several reports into one richer
+      description. Needed once the team grows past ~3 agents.
+
+
+================================================================================
+CROSS-CUTTING FEATURES (apply to the whole team)
+================================================================================
+
+[ ] Selectable agent registry
+      Generalize the hardcoded DISCOVERY_PERSONAS list (full_loop.py) into a
+      registry the user can select/deselect from. THIS is the headline feature —
+      it's what lets the same team fit different kinds of sites.
+
+[ ] Duplicates / swarm size
+      Allow N instances ONLY for stochastic persona agents (cheap fuzzing-via-
+      population; surfaces flaky/race bugs). Pointless for deterministic
+      inspector agents — running the API fuzzer twice gives the same result.
+
+
+================================================================================
+BUG-TO-AGENT MATRIX (what to plant so each agent has a target only it can catch)
+================================================================================
+
+  Bug to plant                                   Layer        Only-catcher
+  ---------------------------------------------  -----------  --------------------
+  Negative/zero quantity refund        (have #2) API valid.   Adversary / API Fuzzer
+  Creator joins own team               (have #3) Authz        Adversary / Security
+  IDOR: GET /api/teams/{id} leaks other order    Authz        Security agent
+  Double-click "Buy" creates two orders          State        Confused user
+  Promo <input> has no <label>/aria              A11y         Accessibility agent
+  Price card overflows / button off < 400px      Responsive   Mobile agent
+  Currency "$" on one page, "S$" on another      Content      Content / Copy agent
+  Product list N+1 query, slow at 50 items       Perf         Performance agent
+  Checkout total float -> rounding drift in DB   Data integ.  Data-integrity agent
+  Stale savings (#1), promo-not-applied (#4),
+    price mismatch (#5)                           UI           existing personas
+
+Principle: plant at least one bug that ONLY one agent type can catch, so
+deselecting that agent visibly drops the find. That is what proves the team is
+holistic and that selection matters.

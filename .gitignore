@@ -45,3 +45,6 @@ Thumbs.db
 # ---- Keep these explicitly (override broad rules above) ----
 # main.py.buggy is the demo reset baseline — it MUST be tracked.
 !prototype/main.py.buggy
+
+# i vibecode but i'm SHY
+.claude/
