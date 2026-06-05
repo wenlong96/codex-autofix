@@ -259,7 +259,7 @@
        ========================================================================= */
     .persona-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
       gap: 16px;
     }
     .persona-tile {
@@ -743,11 +743,15 @@
       priya:  'var(--persona-1)',
       kelvin: 'var(--persona-2)',
       hassan: 'var(--persona-3)',
+      api_fuzzer: 'var(--info)',
+      security_auth: 'var(--bad)',
     };
     const PERSONA_INITIALS = {
       priya:  'PK',
       kelvin: 'KT',
       hassan: 'HN',
+      api_fuzzer: 'AF',
+      security_auth: 'SA',
     };
 
     const state = {
@@ -1077,6 +1081,8 @@
       const archLabel = pid === 'priya' ? 'Deal hunter'
                        : pid === 'kelvin' ? 'Price sensitive'
                        : pid === 'hassan' ? 'Comparison shopper'
+                       : pid === 'api_fuzzer' ? 'API fuzzer'
+                       : pid === 'security_auth' ? 'Security/Auth'
                        : pid;
 
       tile.innerHTML = `
@@ -1111,6 +1117,7 @@
         a.type === 'click'    ? `click "${a.text || '?'}"`
       : a.type === 'fill'     ? `fill ${a.selector || '?'} ← "${a.value || ''}"`
       : a.type === 'navigate' ? `navigate ${a.url || '?'}`
+      : a.type === 'api_probe'? `${a.method || 'GET'} ${a.path || '?'} → HTTP ${a.status ?? '?'}`
       : a.type === 'done'     ? `done`
       :                          a.type || '?';
       actionEl.textContent = actDesc;

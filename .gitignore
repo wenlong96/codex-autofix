@@ -41,6 +41,7 @@ Thumbs.db
 *.swp
 .idea/
 .vscode/
+.worktrees/
 
 # ---- Keep these explicitly (override broad rules above) ----
 # main.py.buggy is the demo reset baseline — it MUST be tracked.

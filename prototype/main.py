@@ -167,7 +167,7 @@ async def log_requests(request: Request, call_next):
 @app.get("/api/products")
 def list_products():
     """List all products, with a homepage flash-discount price for display."""
-    HOMEPAGE_DISCOUNT = 0.08
+    HOMEPAGE_DISCOUNT = 0.0
     with get_db() as conn:
         rows = conn.execute("SELECT * FROM products").fetchall()
         products = [dict(r) for r in rows]
@@ -235,10 +235,10 @@ def get_team(team_id: str):
             "SELECT * FROM products WHERE id = ?", (team["product_id"],)
         ).fetchone()
 
-        complete = len(members) >= 2
+        member_count = len(members)
+        complete = member_count >= 2
 
-        expected_member_count = 2
-        total_savings = product["price"] * TEAM_DISCOUNT * expected_member_count
+        total_savings = product["price"] * TEAM_DISCOUNT * member_count
 
         return {
             "team": dict(team),
@@ -247,7 +247,7 @@ def get_team(team_id: str):
             "complete": complete,
             "discount_pct": TEAM_DISCOUNT * 100,
             "total_savings": round(total_savings, 2),
-            "member_count": len(members),
+            "member_count": member_count,
         }
 
 
@@ -310,6 +310,7 @@ def checkout(req: CheckoutRequest):
         promo_code_echoed = req.promo_code
         if req.promo_code and req.promo_code.strip().upper() == "SAVE10":
             promo_applied = True
+            total = total * 0.90
 
         order_id = str(uuid.uuid4())[:8]
         conn.execute(

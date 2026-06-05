@@ -10,6 +10,7 @@ browser personas.
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -17,7 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from personas.llm_client import get_llm_client
-from personas.run_one import PersonaReport
+from personas.run_one import Observation, PersonaReport
 
 
 @dataclass
@@ -188,11 +189,13 @@ def _plan_probes(
 def _execute_probes(
     target_url: str,
     probes: list[Probe],
+    persona_id: str | None = None,
+    verbose: bool = True,
 ) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
     created_team_id: str | None = None
 
-    for probe in probes:
+    for step, probe in enumerate(probes, 1):
         path = probe.path
         body = dict(probe.body or {})
 
@@ -208,6 +211,7 @@ def _execute_probes(
 
         observations.append(
             {
+                "step": step,
                 "method": probe.method,
                 "path": path,
                 "body": body or None,
@@ -216,7 +220,52 @@ def _execute_probes(
                 "response": resp.body if resp.body is not None else resp.text[:500],
             }
         )
+        if verbose and persona_id:
+            print(f"[{persona_id}] step {step} | {probe.method} {path} -> HTTP {resp.status}")
     return observations
+
+
+def _api_observations_to_persona_observations(
+    target_url: str,
+    api_observations: list[dict[str, Any]],
+) -> list[Observation]:
+    out: list[Observation] = []
+    for i, obs in enumerate(api_observations, 1):
+        method = str(obs.get("method", "GET")).upper()
+        path = str(obs.get("path", "/"))
+        status = obs.get("status")
+        response = obs.get("response")
+        out.append(
+            Observation(
+                step=int(obs.get("step") or i),
+                page_url=_url(target_url, path),
+                persona_thought=str(obs.get("why") or f"Probe {method} {path}."),
+                action_taken={
+                    "type": "api_probe",
+                    "method": method,
+                    "path": path,
+                    "body": obs.get("body"),
+                    "status": status,
+                    "response": response,
+                },
+                friction_noted=f"HTTP {status}" if isinstance(status, int) and status >= 400 else None,
+            )
+        )
+    return out
+
+
+def _effective_llm_label(
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+) -> tuple[str, str]:
+    provider = (llm_provider or os.environ.get("LLM_PROVIDER", "gemini")).lower()
+    if llm_model:
+        return provider, llm_model
+    if provider == "openai":
+        return provider, os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    if provider == "gemini":
+        return provider, os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+    return provider, "(env default)"
 
 
 def _judge_observations(
@@ -247,6 +296,7 @@ def _deterministic_report(
     possible_bugs: list[str],
     final_assessment: str,
     started: float,
+    observations: list[Observation] | None = None,
 ) -> PersonaReport:
     return PersonaReport(
         persona_id=persona_id,
@@ -258,7 +308,7 @@ def _deterministic_report(
         final_assessment=final_assessment,
         friction_points=[],
         possible_bugs=possible_bugs,
-        observations=[],
+        observations=observations or [],
     )
 
 
@@ -269,8 +319,15 @@ def _run_llm_backend_agent(
     mission: str,
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    verbose: bool = True,
 ) -> PersonaReport:
     started = time.time()
+    if verbose:
+        provider, model = _effective_llm_label(llm_provider, llm_model)
+        print(
+            f"[{persona_id}] starting (backend_inspector) "
+            f"planner=llm provider={provider} model={model}"
+        )
     setup_notes, probes = _plan_probes(
         target_url,
         persona_name,
@@ -278,12 +335,21 @@ def _run_llm_backend_agent(
         llm_provider=llm_provider,
         llm_model=llm_model,
     )
-    observations = _execute_probes(target_url, probes)
+    if verbose:
+        print(f"[{persona_id}] planned {len(probes)} API probe(s)")
+        if setup_notes:
+            print(f"[{persona_id}] plan: {setup_notes}")
+    api_observations = _execute_probes(
+        target_url,
+        probes,
+        persona_id=persona_id,
+        verbose=verbose,
+    )
     judged = _judge_observations(
         persona_name,
         mission,
         setup_notes,
-        observations,
+        api_observations,
         llm_provider=llm_provider,
         llm_model=llm_model,
     )
@@ -294,9 +360,12 @@ def _run_llm_backend_agent(
     final_assessment = str(judged.get("final_assessment", "")).strip()
     if not final_assessment:
         final_assessment = (
-            f"Planned {len(probes)} probe(s) and executed {len(observations)} "
+            f"Planned {len(probes)} probe(s) and executed {len(api_observations)} "
             "API request(s)."
         )
+    observations = _api_observations_to_persona_observations(target_url, api_observations)
+    if verbose:
+        print(f"[{persona_id}] done - {len(observations)} steps, {len(possible_bugs)} bugs flagged")
     return _deterministic_report(
         target_url=target_url,
         persona_id=persona_id,
@@ -304,6 +373,7 @@ def _run_llm_backend_agent(
         possible_bugs=possible_bugs,
         final_assessment=final_assessment,
         started=started,
+        observations=observations,
     )
 
 
@@ -312,6 +382,7 @@ def run_api_fuzzer_inspector(
     planner: str = "llm",
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    verbose: bool = True,
 ) -> PersonaReport:
     """
     BE-1: non-positive join quantities must be rejected with 400.
@@ -330,28 +401,62 @@ def run_api_fuzzer_inspector(
             mission,
             llm_provider=llm_provider,
             llm_model=llm_model,
+            verbose=verbose,
         )
 
     possible_bugs: list[str] = []
-    observations: list[str] = []
+    api_observations: list[dict[str, Any]] = []
 
-    team_id = _create_team(target_url, user_id="fuzz_creator")
+    if verbose:
+        print(f"[api_fuzzer] starting (backend_inspector) planner=deterministic")
+
+    setup_body = {"product_id": 1, "user_id": "fuzz_creator"}
+    setup_resp = _request_json(target_url, "POST", "/api/teams", setup_body)
+    team_id = None
+    if setup_resp.status == 200 and isinstance(setup_resp.body, dict):
+        raw_team_id = setup_resp.body.get("team_id")
+        team_id = str(raw_team_id) if raw_team_id else None
+    api_observations.append(
+        {
+            "step": 1,
+            "method": "POST",
+            "path": "/api/teams",
+            "body": setup_body,
+            "why": "Create a valid team so quantity-boundary join probes have a real target.",
+            "status": setup_resp.status,
+            "response": setup_resp.body if setup_resp.body is not None else setup_resp.text[:500],
+        }
+    )
+    if verbose:
+        print(f"[api_fuzzer] step 1 | POST /api/teams -> HTTP {setup_resp.status}")
     if not team_id:
         possible_bugs.append(
             "API Fuzzer could not create a team with POST /api/teams, so it "
             "could not probe join quantity validation."
         )
     else:
-        for qty in (-1, 0):
+        for step, qty in enumerate((-1, 0), 2):
+            path = f"/api/teams/{team_id}/join"
+            body = {"user_id": f"fuzz_joiner_{qty}", "quantity": qty}
             resp = _request_json(
                 target_url,
                 "POST",
-                f"/api/teams/{team_id}/join",
-                {"user_id": f"fuzz_joiner_{qty}", "quantity": qty},
+                path,
+                body,
             )
-            observations.append(
-                f"POST /api/teams/{team_id}/join quantity={qty} -> HTTP {resp.status}"
+            api_observations.append(
+                {
+                    "step": step,
+                    "method": "POST",
+                    "path": path,
+                    "body": body,
+                    "why": f"Probe whether join_team rejects non-positive quantity={qty}.",
+                    "status": resp.status,
+                    "response": resp.body if resp.body is not None else resp.text[:500],
+                }
             )
+            if verbose:
+                print(f"[api_fuzzer] step {step} | POST {path} -> HTTP {resp.status}")
             if resp.status == 200:
                 possible_bugs.append(
                     "POST /api/teams/{team_id}/join accepted "
@@ -360,6 +465,9 @@ def run_api_fuzzer_inspector(
                     "they are stored because they can flow into checkout totals."
                 )
 
+    observations = _api_observations_to_persona_observations(target_url, api_observations)
+    if verbose:
+        print(f"[api_fuzzer] done - {len(observations)} steps, {len(possible_bugs)} bugs flagged")
     return PersonaReport(
         persona_id="api_fuzzer",
         persona_name="API Fuzzer / Contract Agent",
@@ -369,11 +477,18 @@ def run_api_fuzzer_inspector(
         completed_purchase=False,
         final_assessment=(
             "Probed join-team quantity boundaries. "
-            + ("; ".join(observations) if observations else "No probe completed.")
+            + (
+                "; ".join(
+                    f"{o['method']} {o['path']} -> HTTP {o['status']}"
+                    for o in api_observations
+                )
+                if api_observations
+                else "No probe completed."
+            )
         ),
         friction_points=[],
         possible_bugs=possible_bugs,
-        observations=[],
+        observations=observations,
     )
 
 
@@ -382,6 +497,7 @@ def run_security_auth_inspector(
     planner: str = "llm",
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    verbose: bool = True,
 ) -> PersonaReport:
     """
     BE-2: a team creator must not be allowed to join their own team.
@@ -401,12 +517,35 @@ def run_security_auth_inspector(
             mission,
             llm_provider=llm_provider,
             llm_model=llm_model,
+            verbose=verbose,
         )
 
     possible_bugs: list[str] = []
+    api_observations: list[dict[str, Any]] = []
+
+    if verbose:
+        print(f"[security_auth] starting (backend_inspector) planner=deterministic")
 
     creator_id = "alice_security_probe"
-    team_id = _create_team(target_url, user_id=creator_id)
+    setup_body = {"product_id": 1, "user_id": creator_id}
+    setup_resp = _request_json(target_url, "POST", "/api/teams", setup_body)
+    team_id = None
+    if setup_resp.status == 200 and isinstance(setup_resp.body, dict):
+        raw_team_id = setup_resp.body.get("team_id")
+        team_id = str(raw_team_id) if raw_team_id else None
+    api_observations.append(
+        {
+            "step": 1,
+            "method": "POST",
+            "path": "/api/teams",
+            "body": setup_body,
+            "why": "Create a team as the target user before probing creator self-join authorization.",
+            "status": setup_resp.status,
+            "response": setup_resp.body if setup_resp.body is not None else setup_resp.text[:500],
+        }
+    )
+    if verbose:
+        print(f"[security_auth] step 1 | POST /api/teams -> HTTP {setup_resp.status}")
     if not team_id:
         final = (
             "Security/Auth could not create a team with POST /api/teams, so it "
@@ -414,12 +553,27 @@ def run_security_auth_inspector(
         )
         possible_bugs.append(final)
     else:
+        path = f"/api/teams/{team_id}/join"
+        body = {"user_id": creator_id, "quantity": 1}
         resp = _request_json(
             target_url,
             "POST",
-            f"/api/teams/{team_id}/join",
-            {"user_id": creator_id, "quantity": 1},
+            path,
+            body,
         )
+        api_observations.append(
+            {
+                "step": 2,
+                "method": "POST",
+                "path": path,
+                "body": body,
+                "why": "Probe whether a team creator can reuse their own identity to join the team.",
+                "status": resp.status,
+                "response": resp.body if resp.body is not None else resp.text[:500],
+            }
+        )
+        if verbose:
+            print(f"[security_auth] step 2 | POST {path} -> HTTP {resp.status}")
         final = (
             f"POST /api/teams/{team_id}/join as creator {creator_id} "
             f"returned HTTP {resp.status}."
@@ -432,6 +586,9 @@ def run_security_auth_inspector(
                 "without a second real buyer."
             )
 
+    observations = _api_observations_to_persona_observations(target_url, api_observations)
+    if verbose:
+        print(f"[security_auth] done - {len(observations)} steps, {len(possible_bugs)} bugs flagged")
     return PersonaReport(
         persona_id="security_auth",
         persona_name="Security / Auth Agent",
@@ -442,7 +599,7 @@ def run_security_auth_inspector(
         final_assessment=final,
         friction_points=[],
         possible_bugs=possible_bugs,
-        observations=[],
+        observations=observations,
     )
 
 
@@ -451,6 +608,7 @@ def run_backend_inspectors(
     planner: str = "llm",
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    verbose: bool = True,
 ) -> dict[str, PersonaReport]:
     reports = {
         "api_fuzzer": run_api_fuzzer_inspector(
@@ -458,12 +616,14 @@ def run_backend_inspectors(
             planner=planner,
             llm_provider=llm_provider,
             llm_model=llm_model,
+            verbose=verbose,
         ),
         "security_auth": run_security_auth_inspector(
             target_url,
             planner=planner,
             llm_provider=llm_provider,
             llm_model=llm_model,
+            verbose=verbose,
         ),
     }
     return reports
