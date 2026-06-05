@@ -261,6 +261,12 @@ def main() -> int:
         help="skip backend inspector agents; run browser personas only",
     )
     parser.add_argument(
+        "--inspector-planner",
+        choices=["llm", "deterministic"],
+        default="llm",
+        help="backend inspector planning mode (default: llm)",
+    )
+    parser.add_argument(
         "--skip-personas",
         action="store_true",
         help="skip browser personas; useful for deterministic backend-agent smoke tests",
@@ -330,7 +336,10 @@ def main() -> int:
     if not args.no_inspectors:
         banner("STAGE 1B â€” BACKEND INSPECTORS: API + AUTH PROBES")
         try:
-            inspector_reports = run_backend_inspectors(args.target)
+            inspector_reports = run_backend_inspectors(
+                args.target,
+                planner=args.inspector_planner,
+            )
             reports.update(inspector_reports)
             for pid, rpt in inspector_reports.items():
                 print(f"  {rpt.persona_name} ({pid}): {len(rpt.possible_bugs)} bug(s) flagged")
