@@ -1,87 +1,42 @@
-# Prototype — TeamBuy SG
+# Prototype - GroupBuy Lab
 
-Shopee-style team-purchase service. The thing personas will test and the
-self-healing orchestrator will patch.
+Runnable group-buy prototype for the product-vision branch. It intentionally
+plants group-buy bugs that match the branch's product-vision agents.
 
-## Run it
+## Run It
 
 ```bash
 cd prototype
-
-# 1. install deps
 pip install -r requirements.txt
-
-# 2. seed the DB with sample products
 python seed.py
-
-# 3. start the server
 python main.py
-# (or: uvicorn main:app --reload)
 ```
 
-Open http://localhost:8000
+Open http://localhost:8000/products
 
-## What's in here
+## What's In Here
 
-- `main.py` — FastAPI backend, all routes
-- `seed.py` — drops + recreates `prototype.db` with 6 sample products
-- `static/index.html` + `static/app.js` — frontend (vanilla JS SPA)
-- `tests/test_planted_bugs.py` — pytest demonstrating each bug
-- `BUGS.md` — the 3 planted bugs documented with fixes
+- `main.py` - FastAPI backend for products, checkout, group buys, orders, and finalization.
+- `main.py.buggy` - reset baseline with the product-vision planted bugs.
+- `seed.py` - drops and recreates `prototype.db` with four group-buy products.
+- `static/index.html` and `static/app.js` - vanilla JS frontend.
+- `tests/test_regressions.py` - tests for the correct behavior; planted bug tests fail by design.
+- `BUGS.md` - private answer key for the branch-specific planted bugs.
+- `BUG_PROPOSALS.md` and `TEST_CASE_SUITE.md` - broader group-buy QA planning docs.
 
-## Demo flow (manual sanity check)
-
-1. Open http://localhost:8000 → see 6 products.
-2. Click any product → product detail page.
-3. Click "Start a team" → redirected to team page with share URL.
-4. Open the share URL in a different browser / incognito (different `user_id`) → click "Join this team".
-5. Back on the first browser, refresh → team is complete, can checkout at 15% off.
-
-## Verifying the bugs exist
+## Expected Test Result
 
 ```bash
 cd prototype
-python -m pytest tests/ -v
+python -m pytest tests -q
 ```
 
-You should see the `test_bug1_*`, `test_bug2_*`, `test_bug3_*` tests **FAIL**.
-That's correct — the bugs are present. After self-healing, they should pass.
+Expected before healing:
 
-The "happy path" tests should pass already.
-
-## Triggering bugs manually (for persona scripting)
-
-```bash
-# Bug 1 — stale total_savings
-curl -X POST http://localhost:8000/api/teams \
-  -H "Content-Type: application/json" \
-  -d '{"product_id": 1, "user_id": "alice"}'
-# Then GET the team; look at total_savings — should be inflated.
-
-# Bug 2 — negative quantity
-curl -X POST http://localhost:8000/api/teams/<team_id>/join \
-  -H "Content-Type: application/json" \
-  -d '{"user_id": "bob", "quantity": -1}'
-# Returns 200 (should be 400)
-
-# Bug 3 — self-join
-curl -X POST http://localhost:8000/api/teams/<team_id>/join \
-  -H "Content-Type: application/json" \
-  -d '{"user_id": "alice", "quantity": 1}'
-# Returns 200 (alice is the creator, should be 400)
+```text
+6 failed, 2 passed
 ```
 
-## Logs
-
-The middleware writes every request to a `logs` table. The orchestrator
-reads from:
-- `GET /api/_logs/recent` — last N requests
-- `GET /api/_logs/errors` — last N requests with status >= 400
-
-## Next steps
-
-Phase 1 (this) → working prototype with planted bugs ✅
-Phase 2 → one Playwright-driven persona that navigates the site
-Phase 3 → self-healing orchestrator that patches a known bug
-Phase 4 → dashboard
-Phase 5 → integration + scale to 20 + 80 personas
+The passing tests cover product loading and normal checkout. The failing tests
+cover the planted group-buy bugs for the flow, pricing, contract, security, and
+data-integrity agents.

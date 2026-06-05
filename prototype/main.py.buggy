@@ -1,32 +1,27 @@
 """
-Team Purchase Prototype - Shopee-style "team up with 1 other person for 15% off"
+Group-buy prototype with intentionally planted branch-specific bugs.
 
-A small FastAPI + SQLite service: browse products, start or join a team for a
-group discount, and check out solo or as a team. Single-file backend, vanilla
-JS frontend in static/.
+This branch is for product-vision/group-buy agents. The app is deliberately
+small, but it exposes the group-buy lifecycle those agents reason about:
+product browsing, checkout, group-buy status, orders, and creator finalization.
 """
 
-import json
+from __future__ import annotations
+
 import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 DB_PATH = Path(__file__).parent / "prototype.db"
 STATIC_DIR = Path(__file__).parent / "static"
 
-TEAM_DISCOUNT = 0.15  # 15% off when team is complete (>= 2 members)
-
-
-# ---------------------------------------------------------------------------
-# DB
-# ---------------------------------------------------------------------------
 
 @contextmanager
 def get_db():
@@ -40,356 +35,388 @@ def get_db():
 
 def init_db():
     with get_db() as conn:
-        conn.executescript("""
+        conn.executescript(
+            """
             CREATE TABLE IF NOT EXISTS products (
-                id INTEGER PRIMARY KEY,
+                id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
-                price REAL NOT NULL,
+                normal_price REAL NOT NULL,
+                group_buy_price REAL NOT NULL,
+                required_group_size INTEGER NOT NULL,
                 description TEXT,
                 image_url TEXT
             );
-            CREATE TABLE IF NOT EXISTS teams (
+            CREATE TABLE IF NOT EXISTS group_buys (
                 id TEXT PRIMARY KEY,
-                product_id INTEGER NOT NULL,
-                creator_id TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'open',
-                created_at INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS team_members (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                team_id TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                quantity INTEGER NOT NULL DEFAULT 1,
-                joined_at INTEGER NOT NULL
+                product_id TEXT NOT NULL,
+                creator_user_id TEXT NOT NULL,
+                required_group_size INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                finalized_at INTEGER
             );
             CREATE TABLE IF NOT EXISTS orders (
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
-                team_id TEXT,
-                product_id INTEGER NOT NULL,
+                product_id TEXT NOT NULL,
+                purchase_type TEXT NOT NULL,
                 quantity INTEGER NOT NULL,
-                unit_price REAL NOT NULL,
-                total REAL NOT NULL,
+                original_unit_price REAL NOT NULL,
+                group_buy_price REAL NOT NULL,
+                discount_amount REAL NOT NULL,
+                final_price REAL NOT NULL,
+                status TEXT NOT NULL,
+                group_buy_id TEXT,
                 created_at INTEGER NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp INTEGER NOT NULL,
-                method TEXT NOT NULL,
-                path TEXT NOT NULL,
-                status_code INTEGER NOT NULL,
-                duration_ms INTEGER NOT NULL,
-                error_message TEXT,
-                request_body TEXT
-            );
-        """)
+            """
+        )
         conn.commit()
 
 
-# ---------------------------------------------------------------------------
-# Models
-# ---------------------------------------------------------------------------
-
-class CreateTeamRequest(BaseModel):
-    product_id: int
+class CreateGroupBuyRequest(BaseModel):
+    product_id: str
     user_id: str
 
 
-class JoinTeamRequest(BaseModel):
+class CreateOrderRequest(BaseModel):
     user_id: str
+    product_id: str
+    purchase_type: str = "NORMAL"
     quantity: int = 1
+    group_buy_id: str | None = None
+    start_group_buy: bool = False
 
 
-class CheckoutRequest(BaseModel):
+class FinalizeGroupBuyRequest(BaseModel):
     user_id: str
-    team_id: str | None = None
-    product_id: int
-    quantity: int = 1
-    promo_code: str | None = None  # e.g. "SAVE10" for 10% off
 
 
-# ---------------------------------------------------------------------------
-# App + middleware
-# ---------------------------------------------------------------------------
-
-app = FastAPI(title="Team Purchase Prototype")
+app = FastAPI(title="Group Buy Product Vision Prototype")
 
 
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    start = time.time()
-    body_bytes = b""
-    if request.method in ("POST", "PUT", "PATCH"):
-        body_bytes = await request.body()
-
-        async def receive():
-            return {"type": "http.request", "body": body_bytes}
-
-        request._receive = receive
-
-    error_msg = None
-    try:
-        response = await call_next(request)
-        status = response.status_code
-    except Exception as e:
-        status = 500
-        error_msg = str(e)
-        raise
-    finally:
-        duration_ms = int((time.time() - start) * 1000)
-        try:
-            with get_db() as conn:
-                conn.execute(
-                    "INSERT INTO logs (timestamp, method, path, status_code, "
-                    "duration_ms, error_message, request_body) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        int(time.time()),
-                        request.method,
-                        str(request.url.path),
-                        status,
-                        duration_ms,
-                        error_msg,
-                        body_bytes.decode(errors="ignore") if body_bytes else None,
-                    ),
-                )
-                conn.commit()
-        except Exception:
-            pass  # don't let logging break the response
-
-    return response
+def _now() -> int:
+    return int(time.time())
 
 
-# ---------------------------------------------------------------------------
-# Product routes
-# ---------------------------------------------------------------------------
+def _product(conn: sqlite3.Connection, product_id: str) -> sqlite3.Row:
+    row = conn.execute(
+        "SELECT * FROM products WHERE id = ?",
+        (product_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(404, "PRODUCT_NOT_FOUND")
+    return row
+
+
+def _group_buy_id(product_id: str, creator_user_id: str) -> str:
+    # PLANTED FLOW BUG: the id ignores creator_user_id. Multiple creators
+    # starting the same product collapse into one group-buy link.
+    return product_id
+
+
+def _participant_count(conn: sqlite3.Connection, group_buy_id: str) -> int:
+    # PLANTED DATA BUG: counts quantity, not unique users.
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(quantity), 0) AS participant_count
+        FROM orders
+        WHERE group_buy_id = ?
+          AND purchase_type = 'GROUP_BUY'
+          AND status IN ('PENDING_GROUP_BUY', 'CONFIRMED')
+        """,
+        (group_buy_id,),
+    ).fetchone()
+    return int(row["participant_count"] or 0)
+
+
+def _refresh_group_buy_status(conn: sqlite3.Connection, group_buy_id: str) -> None:
+    group = conn.execute(
+        "SELECT * FROM group_buys WHERE id = ?",
+        (group_buy_id,),
+    ).fetchone()
+    if not group or group["status"] == "SUCCESS":
+        return
+
+    status = "READY_TO_CHECKOUT" if (
+        _participant_count(conn, group_buy_id) >= group["required_group_size"]
+    ) else "PENDING"
+    conn.execute(
+        "UPDATE group_buys SET status = ? WHERE id = ?",
+        (status, group_buy_id),
+    )
+
+
+def _get_or_create_group_buy(
+    conn: sqlite3.Connection,
+    product_id: str,
+    creator_user_id: str,
+) -> sqlite3.Row:
+    product = _product(conn, product_id)
+    group_buy_id = _group_buy_id(product_id, creator_user_id)
+    group = conn.execute(
+        "SELECT * FROM group_buys WHERE id = ?",
+        (group_buy_id,),
+    ).fetchone()
+    if group:
+        return group
+
+    conn.execute(
+        """
+        INSERT INTO group_buys (
+            id, product_id, creator_user_id, required_group_size, status,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, 'PENDING', ?)
+        """,
+        (
+            group_buy_id,
+            product_id,
+            creator_user_id,
+            product["required_group_size"],
+            _now(),
+        ),
+    )
+    return conn.execute(
+        "SELECT * FROM group_buys WHERE id = ?",
+        (group_buy_id,),
+    ).fetchone()
+
+
+def _serialize_product(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "normal_price": row["normal_price"],
+        "group_buy_price": row["group_buy_price"],
+        "required_group_size": row["required_group_size"],
+        "description": row["description"],
+        "image_url": row["image_url"],
+    }
+
+
+def _serialize_group_buy(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
+    _refresh_group_buy_status(conn, row["id"])
+    group = conn.execute(
+        "SELECT * FROM group_buys WHERE id = ?",
+        (row["id"],),
+    ).fetchone()
+    product = _product(conn, group["product_id"])
+    orders = conn.execute(
+        "SELECT * FROM orders WHERE group_buy_id = ? ORDER BY created_at, id",
+        (group["id"],),
+    ).fetchall()
+    return {
+        "id": group["id"],
+        "product_id": group["product_id"],
+        "creator_user_id": group["creator_user_id"],
+        "required_group_size": group["required_group_size"],
+        "status": group["status"],
+        "participant_count": _participant_count(conn, group["id"]),
+        "product": _serialize_product(product),
+        "orders": [dict(order) for order in orders],
+    }
+
+
+def _serialize_order(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
+    out = dict(row)
+    out["product"] = _serialize_product(_product(conn, row["product_id"]))
+    if row["group_buy_id"]:
+        group = conn.execute(
+            "SELECT * FROM group_buys WHERE id = ?",
+            (row["group_buy_id"],),
+        ).fetchone()
+        if group:
+            out["group_buy"] = _serialize_group_buy(conn, group)
+    return out
+
 
 @app.get("/api/products")
 def list_products():
-    """List all products, with a homepage flash-discount price for display."""
-    HOMEPAGE_DISCOUNT = 0.08
     with get_db() as conn:
-        rows = conn.execute("SELECT * FROM products").fetchall()
-        products = [dict(r) for r in rows]
-        for p in products:
-            p["display_price"] = round(p["price"] * (1 - HOMEPAGE_DISCOUNT), 2)
-        return products
+        rows = conn.execute("SELECT * FROM products ORDER BY id").fetchall()
+        return [_serialize_product(row) for row in rows]
 
 
 @app.get("/api/products/{product_id}")
-def get_product(product_id: int):
+def get_product(product_id: str):
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM products WHERE id = ?", (product_id,)
-        ).fetchone()
-        if not row:
-            raise HTTPException(404, "Product not found")
-        return dict(row)
+        return _serialize_product(_product(conn, product_id))
 
 
-# ---------------------------------------------------------------------------
-# Team routes
-# ---------------------------------------------------------------------------
-
-@app.post("/api/teams")
-def create_team(req: CreateTeamRequest):
-    team_id = str(uuid.uuid4())[:8]
-    now = int(time.time())
+@app.post("/api/group-buys")
+def create_group_buy(req: CreateGroupBuyRequest):
     with get_db() as conn:
-        # Verify product exists
-        product = conn.execute(
-            "SELECT * FROM products WHERE id = ?", (req.product_id,)
-        ).fetchone()
-        if not product:
-            raise HTTPException(404, "Product not found")
-
-        conn.execute(
-            "INSERT INTO teams (id, product_id, creator_id, created_at) "
-            "VALUES (?, ?, ?, ?)",
-            (team_id, req.product_id, req.user_id, now),
-        )
-        # Creator auto-joins
-        conn.execute(
-            "INSERT INTO team_members (team_id, user_id, quantity, joined_at) "
-            "VALUES (?, ?, 1, ?)",
-            (team_id, req.user_id, now),
-        )
+        group = _get_or_create_group_buy(conn, req.product_id, req.user_id)
         conn.commit()
-        return {"team_id": team_id, "share_url": f"/team/{team_id}"}
+        return _serialize_group_buy(conn, group)
 
 
-@app.get("/api/teams/{team_id}")
-def get_team(team_id: str):
-    """Return team status, members, and the projected group savings."""
+@app.get("/api/group-buys/{group_buy_id}")
+def get_group_buy(group_buy_id: str):
     with get_db() as conn:
-        team = conn.execute(
-            "SELECT * FROM teams WHERE id = ?", (team_id,)
+        group = conn.execute(
+            "SELECT * FROM group_buys WHERE id = ?",
+            (group_buy_id,),
         ).fetchone()
-        if not team:
-            raise HTTPException(404, "Team not found")
-
-        members = conn.execute(
-            "SELECT * FROM team_members WHERE team_id = ?", (team_id,)
-        ).fetchall()
-        product = conn.execute(
-            "SELECT * FROM products WHERE id = ?", (team["product_id"],)
-        ).fetchone()
-
-        complete = len(members) >= 2
-
-        expected_member_count = 2
-        total_savings = product["price"] * TEAM_DISCOUNT * expected_member_count
-
-        return {
-            "team": dict(team),
-            "members": [dict(m) for m in members],
-            "product": dict(product) if product else None,
-            "complete": complete,
-            "discount_pct": TEAM_DISCOUNT * 100,
-            "total_savings": round(total_savings, 2),
-            "member_count": len(members),
-        }
+        if not group:
+            raise HTTPException(404, "GROUP_BUY_NOT_FOUND")
+        return _serialize_group_buy(conn, group)
 
 
-@app.post("/api/teams/{team_id}/join")
-def join_team(team_id: str, req: JoinTeamRequest):
-    """Add a member to an open team."""
-    now = int(time.time())
+@app.post("/api/orders")
+def create_order(req: CreateOrderRequest):
     with get_db() as conn:
-        team = conn.execute(
-            "SELECT * FROM teams WHERE id = ?", (team_id,)
-        ).fetchone()
-        if not team:
-            raise HTTPException(404, "Team not found")
-        if team["status"] != "open":
-            raise HTTPException(400, "Team is closed")
+        # PLANTED CONTRACT BUG: quantity is not validated. Zero and negative
+        # quantities can be stored.
+        product = _product(conn, req.product_id)
+        purchase_type = req.purchase_type.upper()
+        group_buy_id = req.group_buy_id
 
-        conn.execute(
-            "INSERT INTO team_members (team_id, user_id, quantity, joined_at) "
-            "VALUES (?, ?, ?, ?)",
-            (team_id, req.user_id, req.quantity, now),
-        )
-        conn.commit()
-        members = conn.execute(
-            "SELECT * FROM team_members WHERE team_id = ?", (team_id,)
-        ).fetchall()
-        return {"success": True, "member_count": len(members)}
+        if purchase_type == "GROUP_BUY":
+            if req.start_group_buy:
+                group = _get_or_create_group_buy(conn, req.product_id, req.user_id)
+                group_buy_id = group["id"]
+            elif group_buy_id:
+                group = conn.execute(
+                    "SELECT * FROM group_buys WHERE id = ?",
+                    (group_buy_id,),
+                ).fetchone()
+                if not group:
+                    raise HTTPException(404, "GROUP_BUY_NOT_FOUND")
+                # PLANTED CONTRACT BUG: trusts req.product_id from the URL/body
+                # instead of deriving product_id from the group-buy session.
+            else:
+                raise HTTPException(400, "GROUP_BUY_REQUIRED")
 
-
-# ---------------------------------------------------------------------------
-# Checkout
-# ---------------------------------------------------------------------------
-
-@app.post("/api/checkout")
-def checkout(req: CheckoutRequest):
-    """Place an order, applying team pricing and promo codes where valid."""
-    now = int(time.time())
-    with get_db() as conn:
-        product = conn.execute(
-            "SELECT * FROM products WHERE id = ?", (req.product_id,)
-        ).fetchone()
-        if not product:
-            raise HTTPException(404, "Product not found")
-
-        unit_price = product["price"]
-        if req.team_id:
-            team = conn.execute(
-                "SELECT * FROM teams WHERE id = ?", (req.team_id,)
-            ).fetchone()
-            if not team:
-                raise HTTPException(404, "Team not found")
-            members = conn.execute(
-                "SELECT * FROM team_members WHERE team_id = ?", (req.team_id,)
-            ).fetchall()
-            if len(members) >= 2:
-                unit_price = unit_price * (1 - TEAM_DISCOUNT)
-
-        total = unit_price * req.quantity
-
-        promo_applied = False
-        promo_code_echoed = req.promo_code
-        if req.promo_code and req.promo_code.strip().upper() == "SAVE10":
-            promo_applied = True
+        original_unit_price = product["normal_price"]
+        group_buy_price = product["group_buy_price"]
+        if purchase_type == "GROUP_BUY":
+            unit_price = group_buy_price
+            # PLANTED PRICING BUG: stores the one-unit discount, not the total
+            # discount for the selected quantity.
+            discount_amount = original_unit_price - group_buy_price
+            final_price = group_buy_price * req.quantity
+            status = "PENDING_GROUP_BUY"
+        else:
+            unit_price = original_unit_price
+            discount_amount = 0.0
+            final_price = unit_price * req.quantity
+            status = "CONFIRMED"
 
         order_id = str(uuid.uuid4())[:8]
         conn.execute(
-            "INSERT INTO orders (id, user_id, team_id, product_id, quantity, "
-            "unit_price, total, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            """
+            INSERT INTO orders (
+                id, user_id, product_id, purchase_type, quantity,
+                original_unit_price, group_buy_price, discount_amount,
+                final_price, status, group_buy_id, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             (
                 order_id,
                 req.user_id,
-                req.team_id,
                 req.product_id,
+                purchase_type,
                 req.quantity,
-                unit_price,
-                total,
-                now,
+                original_unit_price,
+                group_buy_price,
+                discount_amount,
+                final_price,
+                status,
+                group_buy_id,
+                _now(),
             ),
         )
+        if group_buy_id:
+            _refresh_group_buy_status(conn, group_buy_id)
         conn.commit()
-        return {
-            "order_id": order_id,
-            "total": round(total, 2),
-            "unit_price": round(unit_price, 2),
-            "promo_applied": promo_applied,
-            "promo_code": promo_code_echoed,
-        }
+        order = conn.execute(
+            "SELECT * FROM orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        return _serialize_order(conn, order)
 
 
-# ---------------------------------------------------------------------------
-# Logs / observability (orchestrator reads from here)
-# ---------------------------------------------------------------------------
-
-@app.get("/api/_logs/recent")
-def recent_logs(limit: int = 50):
+@app.get("/api/orders/{order_id}")
+def get_order(order_id: str):
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM logs ORDER BY id DESC LIMIT ?", (limit,)
-        ).fetchall()
-        return [dict(r) for r in rows]
+        order = conn.execute(
+            "SELECT * FROM orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        if not order:
+            raise HTTPException(404, "ORDER_NOT_FOUND")
+        return _serialize_order(conn, order)
 
 
-@app.get("/api/_logs/errors")
-def error_logs(limit: int = 20):
+@app.post("/api/group-buys/{group_buy_id}/finalize")
+def finalize_group_buy(group_buy_id: str, req: FinalizeGroupBuyRequest):
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM logs WHERE status_code >= 400 "
-            "ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        group = conn.execute(
+            "SELECT * FROM group_buys WHERE id = ?",
+            (group_buy_id,),
+        ).fetchone()
+        if not group:
+            raise HTTPException(404, "GROUP_BUY_NOT_FOUND")
 
+        # PLANTED SECURITY BUGS: no creator check and no required-size check.
+        conn.execute(
+            """
+            UPDATE orders
+            SET status = 'CONFIRMED'
+            WHERE purchase_type = 'GROUP_BUY'
+              AND product_id = ?
+              AND status = 'PENDING_GROUP_BUY'
+            """,
+            (group["product_id"],),
+        )
+        conn.execute(
+            "UPDATE group_buys SET status = 'SUCCESS', finalized_at = ? WHERE id = ?",
+            (_now(), group_buy_id),
+        )
+        conn.commit()
 
-# ---------------------------------------------------------------------------
-# Static frontend
-# ---------------------------------------------------------------------------
+        updated = conn.execute(
+            "SELECT * FROM group_buys WHERE id = ?",
+            (group_buy_id,),
+        ).fetchone()
+        return _serialize_group_buy(conn, updated)
+
 
 @app.get("/")
 def root():
     return FileResponse(STATIC_DIR / "index.html")
 
 
-@app.get("/product/{product_id}")
-def product_page(product_id: int):
+@app.get("/products")
+def products_page():
     return FileResponse(STATIC_DIR / "index.html")
 
 
-@app.get("/team/{team_id}")
-def team_page(team_id: str):
+@app.get("/products/{product_id}")
+def product_page(product_id: str):
     return FileResponse(STATIC_DIR / "index.html")
 
 
-@app.get("/order/{order_id}")
+@app.get("/checkout")
+def checkout_page():
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/group-buy/{group_buy_id}")
+def group_buy_page(group_buy_id: str):
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/orders/{order_id}")
 def order_page(order_id: str):
     return FileResponse(STATIC_DIR / "index.html")
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-
-# ---------------------------------------------------------------------------
-# Startup
-# ---------------------------------------------------------------------------
 
 @app.on_event("startup")
 def startup():
@@ -398,5 +425,6 @@ def startup():
 
 if __name__ == "__main__":
     import uvicorn
+
     init_db()
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,6 +1,9 @@
 # Group Buy Prototype Bug Proposals
 
-This file records the intentional bug candidates proposed for later buggy-prototype generation and autofix-agent testing. These are proposals only; they are not injected into the prototype.
+This file records intentional bug candidates for group-buy autofix-agent testing.
+The current product-vision branch plants a selected target subset in
+`prototype/main.py` and `prototype/static/app.js`; the remaining candidates are
+kept as backlog ideas for broader agent coverage.
 
 ## Initial Bug Set
 

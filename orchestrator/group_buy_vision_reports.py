@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from dataclasses import asdict
@@ -25,7 +26,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "personas"))
 
 from personas.llm_client import get_llm_client  # noqa: E402
-from personas.run_one import PersonaReport  # noqa: E402
+from personas.run_one import Observation, PersonaReport  # noqa: E402
 
 
 BUG_PROPOSALS = PROJECT_ROOT / "prototype" / "BUG_PROPOSALS.md"
@@ -101,6 +102,7 @@ def _report(
     persona_name: str,
     assessment: str,
     bugs: list[str],
+    observations: list[Observation] | None = None,
 ) -> PersonaReport:
     now = time.time()
     return PersonaReport(
@@ -113,8 +115,66 @@ def _report(
         final_assessment=assessment,
         friction_points=[],
         possible_bugs=bugs,
-        observations=[],
+        observations=observations or [],
     )
+
+
+def _effective_llm_label(
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+) -> tuple[str, str]:
+    provider = (llm_provider or os.environ.get("LLM_PROVIDER", "gemini")).lower()
+    if llm_model:
+        return provider, llm_model
+    if provider == "openai":
+        return provider, os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    if provider == "gemini":
+        return provider, os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+    return provider, "(env default)"
+
+
+def _short_finding(finding: str, limit: int = 96) -> str:
+    compact = " ".join(finding.split())
+    return compact if len(compact) <= limit else compact[: limit - 3] + "..."
+
+
+def _doc_review_observations(
+    mission: str,
+    bugs: list[str],
+) -> list[Observation]:
+    observations = [
+        Observation(
+            step=1,
+            page_url="docs://prototype/group-buy",
+            persona_thought=(
+                "Read BUG_PROPOSALS.md and TEST_CASE_SUITE.md through this "
+                "agent's mission lens."
+            ),
+            action_taken={
+                "type": "doc_review",
+                "source_docs": [
+                    str(BUG_PROPOSALS.relative_to(PROJECT_ROOT)),
+                    str(TEST_SUITE.relative_to(PROJECT_ROOT)),
+                ],
+                "focus": mission,
+            },
+            friction_noted=None,
+        )
+    ]
+    for step, bug in enumerate(bugs, 2):
+        observations.append(
+            Observation(
+                step=step,
+                page_url="docs://prototype/group-buy",
+                persona_thought=f"Selected a finding aligned with this mission: {_short_finding(bug)}",
+                action_taken={
+                    "type": "doc_review",
+                    "finding": bug,
+                },
+                friction_noted=None,
+            )
+        )
+    return observations
 
 
 def _agent_system_prompt(persona_name: str, mission: str) -> str:
@@ -147,8 +207,16 @@ def _run_llm_doc_agent(
     context: dict[str, str],
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    verbose: bool = True,
 ) -> PersonaReport:
     spec = AGENT_SPECS[persona_id]
+    if verbose:
+        provider, model = _effective_llm_label(llm_provider, llm_model)
+        print(
+            f"[{persona_id}] starting (doc_review_agent) "
+            f"planner=llm provider={provider} model={model}"
+        )
+        print(f"[{persona_id}] step 1 | read: BUG_PROPOSALS.md + TEST_CASE_SUITE.md")
     llm = get_llm_client(provider=llm_provider, model=llm_model)
     result = llm.complete_json(
         system=_agent_system_prompt(spec["name"], spec["mission"]),
@@ -159,11 +227,18 @@ def _run_llm_doc_agent(
     possible_bugs = result.get("possible_bugs", [])
     if not isinstance(possible_bugs, list):
         possible_bugs = []
+    bugs = [str(b) for b in possible_bugs if str(b).strip()]
+    observations = _doc_review_observations(spec["mission"], bugs)
+    if verbose:
+        for step, bug in enumerate(bugs, 2):
+            print(f"[{persona_id}] step {step} | report: {_short_finding(bug)}")
+        print(f"[{persona_id}] done - {len(observations)} steps, {len(bugs)} bugs flagged")
     return _report(
         persona_id=persona_id,
         persona_name=spec["name"],
         assessment=str(result.get("final_assessment", "")).strip(),
-        bugs=[str(b) for b in possible_bugs if str(b).strip()],
+        bugs=bugs,
+        observations=observations,
     )
 
 
@@ -171,6 +246,7 @@ def generate_group_buy_reports(
     planner: str = "llm",
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    verbose: bool = True,
 ) -> dict[str, PersonaReport]:
     context = _read_context()
     if planner == "llm":
@@ -180,64 +256,90 @@ def generate_group_buy_reports(
                 context,
                 llm_provider=llm_provider,
                 llm_model=llm_model,
+                verbose=verbose,
             )
             for persona_id in AGENT_SPECS
         }
-    return _generate_deterministic_group_buy_reports()
+    return _generate_deterministic_group_buy_reports(verbose=verbose)
 
 
-def _generate_deterministic_group_buy_reports() -> dict[str, PersonaReport]:
+def _deterministic_agent_report(
+    persona_id: str,
+    assessment: str,
+    bugs: list[str],
+    verbose: bool = True,
+) -> PersonaReport:
+    spec = AGENT_SPECS[persona_id]
+    observations = _doc_review_observations(spec["mission"], bugs)
+    if verbose:
+        print(f"[{persona_id}] starting (doc_review_agent) planner=deterministic")
+        print(f"[{persona_id}] step 1 | read: BUG_PROPOSALS.md + TEST_CASE_SUITE.md")
+        for step, bug in enumerate(bugs, 2):
+            print(f"[{persona_id}] step {step} | report: {_short_finding(bug)}")
+        print(f"[{persona_id}] done - {len(observations)} steps, {len(bugs)} bugs flagged")
+    return _report(
+        persona_id,
+        spec["name"],
+        assessment,
+        bugs,
+        observations=observations,
+    )
+
+
+def _generate_deterministic_group_buy_reports(
+    verbose: bool = True,
+) -> dict[str, PersonaReport]:
     _read_context()
     return {
-        "gb_flow_persona": _report(
+        "gb_flow_persona": _deterministic_agent_report(
             "gb_flow_persona",
-            AGENT_SPECS["gb_flow_persona"]["name"],
             "Deterministic fallback mapping for flow/session lifecycle issues.",
             [
                 "TC-004: Group Buy button creates or opens a session before checkout.",
                 "TC-009: duplicate creator checkout creates an extra pending order.",
                 "TC-010: product-only group-buy links collapse multiple creators into one session.",
             ],
+            verbose=verbose,
         ),
-        "gb_price_persona": _report(
+        "gb_price_persona": _deterministic_agent_report(
             "gb_price_persona",
-            AGENT_SPECS["gb_price_persona"]["name"],
             "Deterministic fallback mapping for checkout pricing bugs.",
             [
                 "TC-006: group-buy checkout shows discounted price as original unit price.",
                 "TC-007: quantity=3 stores one-unit discount instead of total discount.",
                 "Simple Bug 1: checkout final total ignores quantity.",
             ],
+            verbose=verbose,
         ),
-        "gb_contract_fuzzer": _report(
+        "gb_contract_fuzzer": _deterministic_agent_report(
             "gb_contract_fuzzer",
-            AGENT_SPECS["gb_contract_fuzzer"]["name"],
             "Deterministic fallback mapping for contract and tampering bugs.",
             [
                 "TC-008: invalid checkout quantity is accepted.",
                 "TC-013: join checkout trusts URL productId instead of groupBuyId.",
                 "TC-022: invalid routes should return clear not-found errors.",
             ],
+            verbose=verbose,
         ),
-        "gb_security_auth": _report(
+        "gb_security_auth": _deterministic_agent_report(
             "gb_security_auth",
-            AGENT_SPECS["gb_security_auth"]["name"],
             "Deterministic fallback mapping for authorization bugs.",
             [
                 "TC-017: non-creator can finalize group buy.",
                 "TC-018: creator can finalize before required size is reached.",
                 "TC-019: finalization confirms orders outside the finalized groupBuyId.",
             ],
+            verbose=verbose,
         ),
-        "gb_data_integrity": _report(
+        "gb_data_integrity": _deterministic_agent_report(
             "gb_data_integrity",
-            AGENT_SPECS["gb_data_integrity"]["name"],
             "Deterministic fallback mapping for status and invariant bugs.",
             [
                 "TC-007: participant count uses quantity instead of unique users.",
                 "TC-015: order confirmations show stale PENDING after READY_TO_CHECKOUT.",
                 "More Complex Bug 2: READY_TO_CHECKOUT regresses back to PENDING.",
             ],
+            verbose=verbose,
         ),
     }
 
@@ -342,6 +444,7 @@ def main() -> int:
     payload = {
         "started_at": started,
         "ended_at": time.time(),
+        "target": "docs://prototype/group-buy",
         "source_docs": [str(BUG_PROPOSALS), str(TEST_SUITE)],
         "recommended_subset": subset,
         "recommended_subset_reasoning": subset_reasoning,

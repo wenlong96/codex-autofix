@@ -259,7 +259,7 @@
        ========================================================================= */
     .persona-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
       gap: 16px;
     }
     .persona-tile {
@@ -743,11 +743,21 @@
       priya:  'var(--persona-1)',
       kelvin: 'var(--persona-2)',
       hassan: 'var(--persona-3)',
+      gb_flow_persona: 'var(--info)',
+      gb_price_persona: 'var(--persona-1)',
+      gb_contract_fuzzer: 'var(--accent)',
+      gb_security_auth: 'var(--bad)',
+      gb_data_integrity: 'var(--good)',
     };
     const PERSONA_INITIALS = {
       priya:  'PK',
       kelvin: 'KT',
       hassan: 'HN',
+      gb_flow_persona: 'GF',
+      gb_price_persona: 'GP',
+      gb_contract_fuzzer: 'CF',
+      gb_security_auth: 'SA',
+      gb_data_integrity: 'DI',
     };
 
     const state = {
@@ -841,10 +851,11 @@
       tl.push({ t: cursor, fn: () => showPanel('panel-discovery', 'DISCOVERY') });
       cursor += 400;
 
-      const personas = Object.keys(t.discovery || {});
+      const discovery = t.discovery || t.reports || {};
+      const personas = Object.keys(discovery);
       // Prep tiles
       for (const pid of personas) {
-        const rpt = t.discovery[pid];
+        const rpt = discovery[pid];
         tl.push({ t: cursor, fn: () => createPersonaTile('persona-grid', pid, rpt) });
         cursor += 220;
       }
@@ -853,7 +864,7 @@
       // Stream observations across personas, interleaved by their original timing
       const allObs = [];
       for (const pid of personas) {
-        const rpt = t.discovery[pid];
+        const rpt = discovery[pid];
         const rptStart = rpt.started_at || t.started_at;
         const baseOffset = (rptStart - t.started_at) * 1000;
         (rpt.observations || []).forEach((o, idx) => {
@@ -880,7 +891,7 @@
 
       // Mark each persona as "done" with their final report
       for (const pid of personas) {
-        const rpt = t.discovery[pid];
+        const rpt = discovery[pid];
         tl.push({ t: cursor, fn: () => finalisePersonaTile(pid, rpt) });
         cursor += 350;
       }
@@ -1077,6 +1088,11 @@
       const archLabel = pid === 'priya' ? 'Deal hunter'
                        : pid === 'kelvin' ? 'Price sensitive'
                        : pid === 'hassan' ? 'Comparison shopper'
+                       : pid === 'gb_flow_persona' ? 'Group-buy flow'
+                       : pid === 'gb_price_persona' ? 'Price checkout'
+                       : pid === 'gb_contract_fuzzer' ? 'Contract fuzzer'
+                       : pid === 'gb_security_auth' ? 'Security/Auth'
+                       : pid === 'gb_data_integrity' ? 'Data integrity'
                        : pid;
 
       tile.innerHTML = `
@@ -1111,6 +1127,7 @@
         a.type === 'click'    ? `click "${a.text || '?'}"`
       : a.type === 'fill'     ? `fill ${a.selector || '?'} ← "${a.value || ''}"`
       : a.type === 'navigate' ? `navigate ${a.url || '?'}`
+      : a.type === 'doc_review'? (a.finding ? `report ${truncateInline(a.finding, 72)}` : 'read product docs')
       : a.type === 'done'     ? `done`
       :                          a.type || '?';
       actionEl.textContent = actDesc;
@@ -1346,6 +1363,11 @@
     function safeParse(s) {
       if (typeof s !== 'string') return s || null;
       try { return JSON.parse(s); } catch { return null; }
+    }
+
+    function truncateInline(s, n) {
+      const compact = String(s || '').replace(/\s+/g, ' ').trim();
+      return compact.length > n ? compact.slice(0, n - 1) + 'â€¦' : compact;
     }
 
     function renderDiff(diff) {

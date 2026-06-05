@@ -1,151 +1,108 @@
-# Planted Bugs
+# Product-Vision Branch Planted Bugs
 
-Each bug is small, isolated, and patchable by Codex with a 1-5 line fix.
-They span three categories so the demo shows variety: **state bug**,
-**validation bug**, **authorization bug**.
+These bugs are intentionally planted for the group-buy product-vision agents.
+They are different from the main TeamBuy SG bugs.
 
----
+## Bug 1 - Group Buy creates a session before checkout
 
-## Bug #1 — Stale `total_savings` in `GET /api/teams/{team_id}`
+Agent target: `gb_flow_persona`
 
-**Category:** State / business logic
-**Location:** `main.py`, `get_team()` function
-**Severity:** Medium — misleads users about discount
+Clicking `Group Buy` on a product detail page immediately calls
+`POST /api/group-buys` and navigates to `/group-buy/{id}`. Correct behavior is
+to go to checkout first and create the group-buy session only after order
+placement.
 
-### What happens
-The `total_savings` field is computed using a hardcoded `expected_member_count = 2`
-instead of the actual current number of members. A team with 1 member still
-shows savings as if 2 members had joined.
+Locations:
+- `prototype/static/app.js`, `viewProduct()`
+- `prototype/main.py`, `POST /api/group-buys`
 
-### How a persona finds it
-1. Persona starts a team (1 member, themselves)
-2. Persona looks at the team page → sees inflated "total savings so far"
-3. Persona notes: "the savings number doesn't match the actual team size"
+Regression coverage:
+- `TC-004` in `TEST_CASE_SUITE.md`
 
-### Expected fix
-```python
-# Before
-expected_member_count = 2
-total_savings = product["price"] * TEAM_DISCOUNT * expected_member_count
+## Bug 2 - Group-buy price breakdown is misleading
 
-# After
-total_savings = product["price"] * TEAM_DISCOUNT * len(members)
-```
+Agent target: `gb_price_persona`
 
-### Regression test
-`tests/test_planted_bugs.py::test_bug1_team_total_savings_should_reflect_actual_member_count`
+Group-buy checkout displays the discounted group-buy price as the original unit
+price. It also shows a single-unit final payable even when quantity is greater
+than one.
 
----
+Locations:
+- `prototype/static/app.js`, `viewCheckout()`
+- `prototype/main.py`, `create_order()`
 
-## Bug #2 — Negative quantity accepted in `POST /api/teams/{team_id}/join`
+Regression coverage:
+- `test_group_buy_discount_amount_scales_with_quantity`
+- `TC-006`
+- `TC-007`
 
-**Category:** Input validation
-**Location:** `main.py`, `join_team()` function
-**Severity:** Critical — financial exposure (refunds on checkout)
+## Bug 3 - Invalid checkout quantity is accepted
 
-### What happens
-The join endpoint does not validate that `quantity > 0`. A malicious user can
-submit `quantity = -1`, then check out, and the checkout endpoint multiplies
-unit_price × -1 to produce a negative total = effective refund.
+Agent target: `gb_contract_fuzzer`
 
-### How a persona finds it
-Adversarial persona (the "scammer" archetype) probes by sending negative,
-zero, and string quantities. Bug #2 surfaces immediately.
+The order endpoint stores zero and negative quantities instead of rejecting
+them with a validation error.
 
-### Expected fix
-```python
-# Add near the top of join_team(), before the DB insert
-if req.quantity <= 0:
-    raise HTTPException(400, "Quantity must be positive")
-```
+Location:
+- `prototype/main.py`, `create_order()`
 
-### Regression test
-`tests/test_planted_bugs.py::test_bug2_join_team_should_reject_negative_quantity`
-`tests/test_planted_bugs.py::test_bug2_join_team_should_reject_zero_quantity`
+Regression coverage:
+- `test_invalid_group_buy_quantity_is_rejected`
+- `TC-008`
 
----
+## Bug 4 - Join checkout trusts URL product ID
 
-## Bug #3 — Team creator can join their own team
+Agent target: `gb_contract_fuzzer`
 
-**Category:** Authorization / state
-**Location:** `main.py`, `join_team()` function
-**Severity:** High — abuses the "team complete = discount" rule
+When `group_buy_id` is present, checkout should use the group-buy session's
+product as the source of truth. The planted bug trusts the request/URL
+`product_id`, so a manipulated checkout can attach the wrong product to an
+existing group buy.
 
-### What happens
-The join endpoint does not check whether the joining user is the same as the
-team creator. The creator is auto-joined as member #1 when the team is
-created, then can call `/join` again to become member #2, triggering the
-"team complete" condition without a real second buyer.
+Locations:
+- `prototype/static/app.js`, `viewCheckout()`
+- `prototype/main.py`, `create_order()`
 
-### How a persona finds it
-Adversarial persona attempts to claim the team discount solo by joining
-their own team. Also catchable by a "confused user" persona who clicks
-"join" on their own team page.
+Regression coverage:
+- `test_join_checkout_uses_group_buy_product_as_source_of_truth`
+- `TC-013`
 
-### Expected fix
-```python
-# Add after the team lookup, before the insert
-if req.user_id == team["creator_id"]:
-    raise HTTPException(400, "Cannot join your own team")
-```
+## Bug 5 - Non-creators and not-ready groups can finalize
 
-### Regression test
-`tests/test_planted_bugs.py::test_bug3_creator_cannot_join_own_team`
+Agent target: `gb_security_auth`
 
----
+The finalization endpoint does not check that the caller is the creator and does
+not check that the group has reached its required size.
 
-## Bug #4 — Promo code accepted but not applied in `POST /api/checkout`
+Location:
+- `prototype/main.py`, `finalize_group_buy()`
 
-**Category:** UI/UX trust (display lies about state)
-**Location:** `main.py`, `checkout()` function
-**Severity:** High — user-visible misrepresentation, financial impact
+Regression coverage:
+- `test_non_creator_cannot_finalize_group_buy`
+- `test_creator_cannot_finalize_before_required_size`
+- `TC-017`
+- `TC-018`
 
-### What happens
-The checkout endpoint accepts a `promo_code`. When the code is `SAVE10`, it
-sets `promo_applied = True` in the response and echoes the code, BUT the
-total is never actually reduced. Users see "Promo SAVE10 applied!" on the
-confirmation page yet pay full price.
+## Bug 6 - Participant count uses quantity, not unique users
 
-### How a persona finds it
-Deal-hunter persona enters `SAVE10` at checkout, sees the success banner,
-then checks: did the total actually drop? It didn't. The persona flags
-the mismatch between the "applied" message and the unchanged amount.
+Agent target: `gb_data_integrity`
 
-### Expected fix
-```python
-# Inside the SAVE10 branch, also reduce the total
-if req.promo_code and req.promo_code.strip().upper() == "SAVE10":
-    promo_applied = True
-    total = total * 0.90  # actually apply the 10% discount
-```
+Participant count sums order quantities. A single creator order with quantity
+`3` can make a three-person group appear ready.
 
-### Regression tests
-- `tests/test_planted_bugs.py::test_bug4_promo_save10_actually_reduces_total`
-- `tests/test_planted_bugs.py::test_bug4_unknown_promo_does_not_flag_applied`
+Location:
+- `prototype/main.py`, `_participant_count()`
 
----
+Regression coverage:
+- `test_quantity_counts_as_one_unique_participant`
+- `TC-007`
 
-## Why these four?
+## Why this set
 
-| Bug | Category | Codex skill demonstrated | Persona target |
-|---|---|---|---|
-| #1 | State / business logic | Reading, understanding, refactoring existing logic | Maria (price-sensitive) |
-| #2 | Input validation | Defensive programming, edge case handling | (API-only — surfaced via logs/audit) |
-| #3 | Authorization | Cross-table reasoning, state-aware checks | (API-only — latent vulnerability) |
-| #4 | UI/UX trust | Connecting backend state to user-visible claims | Priya (deal-hunter) |
+The set gives every product-vision agent a concrete target:
 
-Bugs #1 and #4 are **UI-discoverable** by personas during normal exploration.
-Bugs #2 and #3 are API-layer issues that the UI design (correctly) hides —
-they remain in the codebase as latent vulnerabilities the system would flag
-through other means (security audit, log analysis).
-
-Each can be:
-- **Found** by a persona behaving normally or adversarially (not contrived)
-- **Diagnosed** from the logs + a quick read of the file
-- **Fixed** with a small, surgical patch (1-5 lines)
-- **Validated** by a regression test Codex can write
-
-The demo can showcase any 1-2 of these depending on time. Bug #2 is the
-most dramatic (negative-money refund = audible reaction). Bug #3 is the
-sneakiest (looks fine in casual testing). Bug #1 is the easiest visual
-("this number is wrong").
+- `gb_flow_persona`: early group creation and product-only group links.
+- `gb_price_persona`: incorrect checkout and stored discount math.
+- `gb_contract_fuzzer`: invalid quantities and source-of-truth tampering.
+- `gb_security_auth`: missing finalization authorization.
+- `gb_data_integrity`: quantity-based participant drift.

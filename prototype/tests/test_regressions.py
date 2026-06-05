@@ -1,12 +1,12 @@
 """
-Regression tests for the team-purchase service.
+Regression tests for the intended group-buy behavior.
 
-Each test asserts a piece of correct behaviour. Tests that currently fail
-describe behaviour the service does not yet satisfy.
-
-Run with:
-    cd prototype && python -m pytest tests/ -v
+These tests describe the correct product behavior. The product-vision branch
+keeps several of them failing on purpose so the agents have planted bugs to
+find and Codex has concrete repair targets.
 """
+
+from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,7 +17,7 @@ from seed import seed
 
 @pytest.fixture(autouse=True)
 def fresh_db():
-    seed()  # resets DB with sample products
+    seed()
     init_db()
     yield
 
@@ -27,184 +27,136 @@ def client():
     return TestClient(app)
 
 
-# ---------------------------------------------------------------------------
-# Team savings
-# ---------------------------------------------------------------------------
-
-def test_team_savings_reflects_actual_member_count(client):
-    """Displayed savings should match the number of members who have joined."""
-    # Creator starts a team (1 member only)
-    r = client.post("/api/teams", json={"product_id": 1, "user_id": "alice"})
-    team_id = r.json()["team_id"]
-
-    r = client.get(f"/api/teams/{team_id}")
-    data = r.json()
-
-    # With only 1 member, savings should be for 1 person, not 2
-    product_price = 89.90
-    expected = round(product_price * 0.15 * 1, 2)
-    assert data["total_savings"] == expected, (
-        f"Expected savings for 1 member ({expected}) but got "
-        f"{data['total_savings']}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Join validation
-# ---------------------------------------------------------------------------
-
-def test_join_team_rejects_negative_quantity(client):
-    """A negative quantity should be rejected with a 400."""
-    r = client.post("/api/teams", json={"product_id": 1, "user_id": "alice"})
-    team_id = r.json()["team_id"]
-
-    r = client.post(
-        f"/api/teams/{team_id}/join",
-        json={"user_id": "bob", "quantity": -1},
-    )
-    assert r.status_code == 400, (
-        f"Expected 400 for negative quantity, got {r.status_code}"
-    )
-
-
-def test_join_team_rejects_zero_quantity(client):
-    """A zero quantity should be rejected with a 400."""
-    r = client.post("/api/teams", json={"product_id": 1, "user_id": "alice"})
-    team_id = r.json()["team_id"]
-
-    r = client.post(
-        f"/api/teams/{team_id}/join",
-        json={"user_id": "bob", "quantity": 0},
-    )
-    assert r.status_code == 400
-
-
-# ---------------------------------------------------------------------------
-# Self-join
-# ---------------------------------------------------------------------------
-
-def test_creator_cannot_join_own_team(client):
-    """A team's creator should not be able to join their own team."""
-    r = client.post("/api/teams", json={"product_id": 1, "user_id": "alice"})
-    team_id = r.json()["team_id"]
-
-    # Alice tries to join her own team
-    r = client.post(
-        f"/api/teams/{team_id}/join",
-        json={"user_id": "alice", "quantity": 1},
-    )
-    assert r.status_code == 400, (
-        f"Expected 400 for self-join, got {r.status_code}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Promo codes
-# ---------------------------------------------------------------------------
-
-def test_promo_save10_reduces_total(client):
-    """SAVE10 should reduce the order total by 10%, not just be acknowledged."""
-    # Reference total without promo
-    r = client.post(
-        "/api/checkout",
-        json={"user_id": "alice", "product_id": 1, "quantity": 1},
-    )
-    full_total = r.json()["total"]
-
-    # Same checkout with SAVE10
-    r = client.post(
-        "/api/checkout",
+def create_group_order(
+    client: TestClient,
+    *,
+    user_id: str = "u001",
+    product_id: str = "p001",
+    quantity: int = 1,
+    group_buy_id: str | None = None,
+    start_group_buy: bool = True,
+):
+    return client.post(
+        "/api/orders",
         json={
-            "user_id": "alice",
-            "product_id": 1,
-            "quantity": 1,
-            "promo_code": "SAVE10",
+            "user_id": user_id,
+            "product_id": product_id,
+            "purchase_type": "GROUP_BUY",
+            "quantity": quantity,
+            "group_buy_id": group_buy_id,
+            "start_group_buy": start_group_buy,
         },
     )
-    data = r.json()
-
-    expected = round(full_total * 0.90, 2)
-    assert data["promo_applied"] is True
-    assert data["total"] == pytest.approx(expected, abs=0.02), (
-        f"Expected SAVE10 to reduce total to {expected}, got {data['total']}"
-    )
 
 
-def test_unknown_promo_not_marked_applied(client):
-    """An unknown promo code should not be reported as applied."""
-    r = client.post(
-        "/api/checkout",
+def test_products_load(client):
+    response = client.get("/api/products")
+    assert response.status_code == 200
+    products = response.json()
+    assert len(products) == 4
+    assert {p["id"] for p in products} == {"p001", "p002", "p003", "p004"}
+
+
+def test_normal_checkout_confirms_immediately(client):
+    response = client.post(
+        "/api/orders",
         json={
-            "user_id": "alice",
-            "product_id": 1,
-            "quantity": 1,
-            "promo_code": "BOGUSCODE",
+            "user_id": "u001",
+            "product_id": "p001",
+            "purchase_type": "NORMAL",
+            "quantity": 2,
         },
     )
-    assert r.json()["promo_applied"] is False
+    assert response.status_code == 200
+    order = response.json()
+    assert order["status"] == "CONFIRMED"
+    assert order["final_price"] == pytest.approx(59.98, abs=0.01)
 
 
-# ---------------------------------------------------------------------------
-# Price consistency
-# ---------------------------------------------------------------------------
+def test_quantity_counts_as_one_unique_participant(client):
+    response = create_group_order(client, user_id="u001", product_id="p001", quantity=3)
+    group_buy_id = response.json()["group_buy_id"]
 
-def test_list_price_matches_checkout_price(client):
-    """The price shown in the product list should match what checkout charges."""
-    r = client.get("/api/products")
-    products = r.json()
-    p = next(x for x in products if x["id"] == 1)
-    list_displayed = p.get("display_price", p["price"])
+    group = client.get(f"/api/group-buys/{group_buy_id}").json()
 
-    r = client.post(
-        "/api/checkout",
-        json={"user_id": "alice", "product_id": 1, "quantity": 1},
+    assert group["participant_count"] == 1
+    assert group["status"] == "PENDING"
+
+
+def test_invalid_group_buy_quantity_is_rejected(client):
+    response = create_group_order(client, quantity=0)
+    assert response.status_code == 400
+
+    response = create_group_order(client, quantity=-1)
+    assert response.status_code == 400
+
+
+def test_group_buy_discount_amount_scales_with_quantity(client):
+    response = create_group_order(client, user_id="u001", product_id="p001", quantity=3)
+    order = response.json()
+
+    assert order["discount_amount"] == pytest.approx(30.00, abs=0.01)
+    assert order["final_price"] == pytest.approx(59.97, abs=0.01)
+
+
+def test_join_checkout_uses_group_buy_product_as_source_of_truth(client):
+    creator_order = create_group_order(
+        client,
+        user_id="u001",
+        product_id="p001",
+        quantity=1,
+    ).json()
+
+    # Manipulated request claims product p002 while joining p001's group buy.
+    response = create_group_order(
+        client,
+        user_id="u002",
+        product_id="p002",
+        quantity=1,
+        group_buy_id=creator_order["group_buy_id"],
+        start_group_buy=False,
     )
-    paid = r.json()["total"]
+    assert response.status_code == 200
+    order = response.json()
+    assert order["product_id"] == "p001"
 
-    assert list_displayed == pytest.approx(paid, abs=0.02), (
-        f"List shows {list_displayed} but checkout charges {paid}"
+
+def test_non_creator_cannot_finalize_group_buy(client):
+    order = create_group_order(
+        client,
+        user_id="u001",
+        product_id="p002",
+        quantity=1,
+    ).json()
+    group_buy_id = order["group_buy_id"]
+    create_group_order(
+        client,
+        user_id="u002",
+        product_id="p002",
+        quantity=1,
+        group_buy_id=group_buy_id,
+        start_group_buy=False,
     )
 
-
-# ---------------------------------------------------------------------------
-# Sanity checks (these should always pass)
-# ---------------------------------------------------------------------------
-
-def test_list_products_returns_seeded_products(client):
-    r = client.get("/api/products")
-    assert r.status_code == 200
-    products = r.json()
-    assert len(products) >= 6
-    assert any(p["name"] == "Wireless Earbuds Pro" for p in products)
-
-
-def test_happy_path_team_purchase(client):
-    # Alice creates team
-    r = client.post("/api/teams", json={"product_id": 1, "user_id": "alice"})
-    team_id = r.json()["team_id"]
-
-    # Bob joins
-    r = client.post(
-        f"/api/teams/{team_id}/join",
-        json={"user_id": "bob", "quantity": 1},
+    response = client.post(
+        f"/api/group-buys/{group_buy_id}/finalize",
+        json={"user_id": "u002"},
     )
-    assert r.status_code == 200
+    assert response.status_code == 400
+    assert response.json()["detail"] == "ONLY_CREATOR_CAN_FINALIZE"
 
-    # Team should be complete
-    r = client.get(f"/api/teams/{team_id}")
-    assert r.json()["complete"] is True
-    assert r.json()["member_count"] == 2
 
-    # Bob checks out at team price
-    r = client.post(
-        "/api/checkout",
-        json={
-            "user_id": "bob",
-            "team_id": team_id,
-            "product_id": 1,
-            "quantity": 1,
-        },
+def test_creator_cannot_finalize_before_required_size(client):
+    order = create_group_order(
+        client,
+        user_id="u001",
+        product_id="p001",
+        quantity=1,
+    ).json()
+
+    response = client.post(
+        f"/api/group-buys/{order['group_buy_id']}/finalize",
+        json={"user_id": "u001"},
     )
-    assert r.status_code == 200
-    # Team price for 89.90 with 15% off = 76.415
-    assert r.json()["total"] == pytest.approx(76.41, abs=0.02)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "GROUP_BUY_SIZE_NOT_REACHED"
