@@ -39,6 +39,7 @@ load_dotenv()
 
 from orchestrator.agent import heal, HealResult, DEFAULT_MODEL  # noqa: E402
 from orchestrator.heal import make_streamer  # noqa: E402
+from orchestrator.inspectors import run_backend_inspectors  # noqa: E402
 from orchestrator.verifier import verify_bug, Verdict  # noqa: E402
 from personas.persona_profiles import get_persona, Persona  # noqa: E402
 from personas.run_one import (  # noqa: E402
@@ -254,6 +255,21 @@ def main() -> int:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--skip-reset", action="store_true")
     parser.add_argument("--no-revalidate", action="store_true")
+    parser.add_argument(
+        "--no-inspectors",
+        action="store_true",
+        help="skip backend inspector agents; run browser personas only",
+    )
+    parser.add_argument(
+        "--skip-personas",
+        action="store_true",
+        help="skip browser personas; useful for deterministic backend-agent smoke tests",
+    )
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help="stop after discovery and save reports; do not verify or heal",
+    )
     parser.add_argument("--max-heals", type=int, default=3, help="cap on heals per run")
     parser.add_argument(
         "--stagger",
@@ -290,7 +306,10 @@ def main() -> int:
         print(f"  Stagger: {args.stagger}s between non-spotlight starts")
     print()
 
-    if args.sequential:
+    if args.skip_personas:
+        reports = {}
+        print("  (skipped browser personas â€” --skip-personas)")
+    elif args.sequential:
         reports = run_discovery_sequential(
             target_url=args.target,
             max_steps=args.max_steps,
@@ -308,9 +327,46 @@ def main() -> int:
             )
         )
 
+    if not args.no_inspectors:
+        banner("STAGE 1B â€” BACKEND INSPECTORS: API + AUTH PROBES")
+        try:
+            inspector_reports = run_backend_inspectors(args.target)
+            reports.update(inspector_reports)
+            for pid, rpt in inspector_reports.items():
+                print(f"  {rpt.persona_name} ({pid}): {len(rpt.possible_bugs)} bug(s) flagged")
+                print(f"    {rpt.final_assessment}")
+                for bug in rpt.possible_bugs:
+                    print(f"    - {bug[:180]}{'...' if len(bug) > 180 else ''}")
+        except Exception as e:
+            print(f"  âš ï¸  Backend inspectors failed: {type(e).__name__}: {e}")
+
     print_discovery_summary(reports)
 
     raw_bugs = aggregate_bugs(reports)
+    if args.report_only:
+        save_path = PROJECT_ROOT / "personas" / "reports" / f"agent_reports_{int(overall_started)}.json"
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        report_payload = {
+            "started_at": overall_started,
+            "ended_at": time.time(),
+            "target": args.target,
+            "report_only": True,
+            "raw_bug_count": len(raw_bugs),
+            "reports": {pid: asdict(rpt) for pid, rpt in reports.items()},
+            "raw_bugs": [
+                {"persona_id": pid, "bug": bug}
+                for pid, bug in raw_bugs
+            ],
+        }
+        save_path.write_text(
+            json.dumps(report_payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print()
+        print(f"  Report-only mode: saved {len(reports)} agent report(s) to {save_path}")
+        print(f"  Raw bugs flagged: {len(raw_bugs)}")
+        return 0
+
     if not raw_bugs:
         print("\n  No possible bugs reported by any persona. Nothing to heal.")
         return 0
