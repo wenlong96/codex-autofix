@@ -1,0 +1,198 @@
+================================================================================
+LLM-CAPABLE BACKEND AGENTS — TRY / FALLBACK PLAN
+================================================================================
+
+Decision (2026-06-03): the agents that were going to be plain deterministic
+(API Fuzzer, Security, and optionally the a11y checker) will FIRST be attempted
+with real LLM reasoning. If that doesn't work within the timebox below, we FALL
+BACK to the deterministic versions already specced in team/AGENT_PLAN.md (3).
+
+Build window: tonight / tomorrow.
+
+Why bother: a deterministic agent that fires quantity=-1 at a known endpoint and
+checks for a hardcoded 400 is just an integration test in a costume — "anyone
+can code it." The defensible, non-commodity capability is an agent that can
+reason about an API it was NOT pre-coded for: discover the surface, decide what
+SHOULD be true, generate its own probes, and judge fuzzy responses. THAT is what
+makes these "agents" and not tests.
+
+
+================================================================================
+1. SCOPE — which agents this applies to
+================================================================================
+
+  - BE-1  API Fuzzer / Contract agent      (catches bug #2, negative/zero qty)
+  - BE-2  Security / Auth agent             (catches bug #3, creator self-join)
+  - (optional) A11y checker                 (label/aria association)
+
+The vision personas (kelvin, priya, hassan, mobile) are ALREADY LLM-driven and
+are out of scope here — this doc is only about upgrading the agents that were
+going to be deterministic.
+
+
+================================================================================
+2. TARGET ARCHITECTURE — "LLM-planned, deterministic-checked"
+================================================================================
+
+Do NOT hand the LLM the final pass/fail on a known oracle. Split the job by
+which part actually needs judgment:
+
+  LLM does the open-ended parts:
+    - read the API surface (OpenAPI spec at /openapi.json, or the route list)
+    - REASON about likely vulnerabilities for each endpoint/field
+    - GENERATE the probe inputs (the adversarial payloads)
+    - INTERPRET ambiguous responses (e.g. "does this body leak a secret,
+      a stack trace, a file path, another user's data?")
+
+  Deterministic code does execution + crisp checks:
+    - actually fire the HTTP requests (requests/httpx)
+    - for CLEAR oracles (status code for quantity<=0, self-join), assert in
+      code — not via the model
+    - emit a PersonaReport with possible_bugs[] (same schema as personas, so the
+      verify -> heal -> re-validate pipeline is unchanged)
+
+This is deliberate: the known planted bugs (#2, #3) still get caught
+DETERMINISTICALLY every single time (demo safety net), while the LLM adds the
+genuinely-agentic part (finding/explaining things we did not pre-code).
+
+FastAPI already serves the spec at /openapi.json — feed that to the LLM as the
+"surface" it reasons over. This is the cheap, honest input for the planner.
+
+
+================================================================================
+3. THE GO / NO-GO GATE  (this is the most important section)
+================================================================================
+
+TIMEBOX: 90 minutes on the LLM path, hard stop. If we are not at "GO" by then,
+switch to the deterministic fallback and move on. Do not negotiate with the
+timebox during the hackathon.
+
+GO (keep the LLM version) requires ALL of:
+  [ ] The LLM-planned agent reliably catches bug #2 AND bug #3 on the known API
+      (it must not regress below what the deterministic version guarantees).
+  [ ] It produces a clean run with NO false-positive bugs that the verifier
+      would have to reject (an LLM that cries wolf pollutes the heal stage).
+  [ ] It runs end-to-end in under ~60s per agent (so the live demo isn't a
+      stall).
+  [ ] BONUS / the actual reason to do this: it catches or sensibly probes at
+      least ONE thing we did NOT hardcode (e.g. reasons its way to a probe on an
+      endpoint we didn't anticipate, or flags a fuzzy response). Without this,
+      the LLM version has no payoff over deterministic — see section 7.
+
+NO-GO (fall back) if ANY of:
+  - It misses bug #2 or #3 that the deterministic check would have caught.
+  - It hallucinates bugs that aren't real (verifier rejects them / wastes heals).
+  - It's too slow or flaky to trust on stage.
+  - We blow the 90-minute timebox.
+
+
+================================================================================
+4. WHY THE FALLBACK IS CHEAP  (design so switching back is ~10 minutes)
+================================================================================
+
+Architect the LLM version so the deterministic version is the SAME agent with
+the planner swapped out. Concretely:
+
+  - Both versions share:
+      * the execution layer (the code that fires HTTP requests)
+      * the crisp assertions for known oracles
+      * the PersonaReport output / pipeline wiring in full_loop.py
+
+  - The ONLY difference is the "planner":
+      * LLM planner:           asks the model for probes given /openapi.json
+      * Deterministic planner:  a hardcoded list of probes (the spec in
+                                AGENT_PLAN.md section 3: qty=-1, qty=0, huge,
+                                string; self-join replay)
+
+  - Put the planner behind a flag, e.g.  --planner=llm | deterministic
+    (default deterministic). Falling back = flipping the default. The known-bug
+    assertions run either way, so #2/#3 are caught in BOTH modes.
+
+This means the deterministic fallback is NOT a rewrite — it already exists as the
+default code path. The LLM is an additive layer on top.
+
+
+================================================================================
+5. IMPLEMENTATION STEPS — LLM PATH
+================================================================================
+
+  1. Create orchestrator/inspectors.py (if not already) with the shared
+     execution layer + PersonaReport assembly (see AGENT_PLAN.md section 3 step 1).
+
+  2. Add a planner interface, e.g.:
+        plan_probes(surface: dict) -> list[Probe]
+     where Probe = {method, path, body, why}. Two implementations:
+        - deterministic_planner(...)  : the hardcoded list (fallback, default)
+        - llm_planner(...)            : prompt the model with /openapi.json and
+                                        ask for a JSON list of probes to run
+
+  3. LLM planner prompt (sketch):
+        "You are a security/contract tester. Here is an OpenAPI spec: <json>.
+         List concrete HTTP probes that could reveal validation, authz, or data
+         bugs. For each: method, path, body, and one line on why. Return JSON."
+     Use the OpenAI client already configured in personas/llm_client.py — do NOT
+     add a new client; reuse the existing adapter and key handling.
+
+  4. Run the probes deterministically. For each response:
+        - KNOWN oracle (qty<=0 -> 400, self-join -> 400): hard assert in code,
+          append a bug string on violation. THIS is what guarantees #2/#3.
+        - AMBIGUOUS response (5xx body, error text, unexpected payload): pass it
+          to a small LLM "judge" call: "Does this response leak sensitive info or
+          violate the contract? yes/no + why." Append a bug only on a clear yes.
+
+  5. Wire into full_loop.py after persona discovery (see AGENT_PLAN.md section 3
+     step 2): reports["api_fuzzer"] = run_api_fuzzer(target, planner=...).
+
+  6. Gate behind --planner and the existing --no-inspectors flag.
+
+  7. Test against the buggy baseline: confirm #2 and #3 are flagged, and that a
+     HEALED main.py produces NO flags (clean re-validation).
+
+
+================================================================================
+6. IMPLEMENTATION STEPS — DETERMINISTIC FALLBACK
+================================================================================
+
+Already fully specced in team/AGENT_PLAN.md section 3 (BE-1, BE-2). Nothing new
+to design. If NO-GO is hit:
+  - set the default planner to deterministic
+  - delete / disable the llm_planner call (leave the code, just don't invoke it)
+  - the hardcoded probes + assertions are the whole agent
+Bugs #2 and #3 already have passing-when-fixed tests in
+prototype/tests/test_regressions.py, so no test work is needed either way.
+
+
+================================================================================
+7. DEMO FRAMING + THE CAVEAT THAT MUST NOT BE FORGOTTEN
+================================================================================
+
+The LLM version ONLY pays off if the demo actually EXERCISES the reasoning. The
+wow moment to aim for:
+    "We point it at an endpoint it has never seen, and it reasons its way to a
+     probe and a real finding — no test was written for this."
+
+If we cannot show that on the day, the LLM adds risk for a capability the judges
+won't see. In that case the deterministic version is the better engineering
+choice, because the genuine novelty of THIS project was never the fuzzer — it's
+the closed find -> verify -> Codex-heal -> re-validate LOOP. A deterministic
+fuzzer is a perfectly respectable INPUT to that loop.
+
+So: try the LLM version, but the bar for keeping it is "it does something a
+hardcoded script can't, AND we can demo that." Otherwise, ship deterministic and
+spend the saved time polishing the heal loop and the dashboard replay.
+
+
+================================================================================
+8. OPEN QUESTIONS / RISKS TO WATCH
+================================================================================
+
+  - False positives: an over-eager LLM judge that flags benign responses will
+    pollute the verifier/heal stage. Keep the judge conservative (only clear
+    violations). Watch this during the 90-min test.
+  - Latency: each LLM call adds seconds. Cap probe count and judge only the
+    genuinely ambiguous responses, not every 200.
+  - Determinism for the recorded demo run: even if we keep the LLM version,
+    record a known-good run for the dashboard so a weird model answer on the day
+    can't sink the demo (replay-first is already the project's design).
+  - Don't let the LLM decide pass/fail on the KNOWN oracles — that's the one
+    rule that protects the #2/#3 guaranteed catches.
