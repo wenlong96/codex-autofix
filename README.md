@@ -7,6 +7,8 @@ hallucinations and duplicates, and Codex diagnoses, patches, and tests the
 verified bugs without a human in the loop. A persona then re-runs against the
 patched site to confirm the fix held.
 
+<img width="959" height="535" alt="image" src="https://github.com/user-attachments/assets/46a35088-52f6-404d-bca7-1926db5f6263" />
+
 ---
 
 ## Table of contents
